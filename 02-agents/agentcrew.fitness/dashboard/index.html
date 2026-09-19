@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>健身助理 · 看板</title>
+<link rel="stylesheet" href="../../04-panel/skin/butler.css" id="skin">
+<style>
+  .bh-grid { display:grid; grid-template-columns: 1fr 1fr; gap:20px; }
+  @media (max-width: 800px){ .bh-grid { grid-template-columns: 1fr; } }
+  .bh-goalbar { background:#2e333c; border-radius:999px; height:10px; overflow:hidden; margin-top:6px; }
+  .bh-goalbar>span { display:block; height:100%; background:var(--bh-accent); }
+  .bh-goal { margin-bottom:14px; }
+  .bh-goal .bh-muted { font-size:12px; }
+  svg.line { width:100%; height:180px; }
+</style>
+</head>
+<body>
+<header class="bh-header">
+  <div>
+    <h1 id="agent-name">…</h1>
+    <p class="bh-sub"><span id="agent-id"></span> · v<span id="agent-version"></span> · 数据更新于 <span id="generated-at"></span></p>
+  </div>
+  <span class="bh-badge">记 · 算 · 盯 · 报</span>
+</header>
+
+<main class="bh-main">
+  <section class="bh-panel" style="border-left:3px solid var(--bh-accent)">
+    <h2 style="margin:0 0 6px;color:var(--bh-accent)">本周简报已就绪</h2>
+    <p style="margin:0;font-size:13px">按 Open Design 设计系统重做的 <a href="weekly.html">健身周报 →</a>（体重曲线 / 每日缺口 / 蛋白达标 / 目标进度，支持 ‹ › 切换周）</p>
+  </section>
+
+  <section class="bh-cards" id="cards"></section>
+
+  <div class="bh-grid" style="margin-top:20px;">
+    <section class="bh-panel">
+      <h2>体重趋势</h2>
+      <svg class="line" id="weight-svg" viewBox="0 0 400 180" preserveAspectRatio="none"></svg>
+      <p class="bh-muted" id="weight-note"></p>
+    </section>
+    <section class="bh-panel">
+      <h2>最新一天 · 代谢与目标</h2>
+      <table class="bh-table" id="today"></table>
+    </section>
+  </div>
+
+  <div class="bh-grid" style="margin-top:20px;">
+    <section class="bh-panel">
+      <h2>最近饮食</h2>
+      <table class="bh-table" id="diet"><thead></thead><tbody></tbody></table>
+    </section>
+    <section class="bh-panel">
+      <h2>目标进度</h2>
+      <div id="goals"></div>
+    </section>
+  </div>
+
+  <section class="bh-panel" style="margin-top:20px;">
+    <h2>说明</h2>
+    <p class="bh-muted">数据全部本地（data\*.jsonl，人可直接打开看）。派生表 daily_records 由 tools/daily.py rebuild 幂等重建。
+    周报摘要：tools/report.py weekly。本页零联网零构建；收编状态下总管面板自动收录。</p>
+  </section>
+</main>
+
+<!-- data.js 由 boot 链加载（本地或 ../_save/dashboard/） -->
+<script>
+document.getElementById('skin').addEventListener('error', function(){ this.setAttribute('href','butler.css'); });
+(function(){
+  var D = window.DASHBOARD_DATA;
+  if (!D) { document.getElementById('agent-name').textContent='暂无数据：运行 tools/data.py serve'; return; }
+  document.getElementById('agent-name').textContent = D.agent.name;
+  document.getElementById('agent-id').textContent = D.agent.id;
+  document.getElementById('agent-version').textContent = D.agent.version;
+  document.getElementById('generated-at').textContent = (D.generated_at||'').replace('T',' ');
+
+  var T = D.tables || {};
+  var dr = (T.daily_records||[]).filter(function(r){return r.recorded_at;});
+  var bs = (T.body_stats||[]).filter(function(r){return r.weight_kg!==null && r.weight_kg!==undefined;});
+  var dl = (T.diet_logs||[]).filter(function(r){return !r._derived;});
+  var goals = (T.goals||[]).filter(function(r){return (r.status||'active')==='active';});
+  var cfg = D.config || {};
+
+  // 卡片
+  var cards = [
+    ['最新体重', bs.length? (bs[bs.length-1].weight_kg+' kg') : '—'],
+    ['今日摄入', dr.length&&dr[dr.length-1].total_calories ? (dr[dr.length-1].total_calories+' kcal') : '—'],
+    ['今日蛋白', dr.length&&dr[dr.length-1].protein_target ? (dr[dr.length-1].total_protein+'/'+dr[dr.length-1].protein_target+' g') : '—'],
+    ['活跃目标', goals.length+' 个']
+  ];
+  document.getElementById('cards').innerHTML = cards.map(function(c){
+    return '<div class="bh-card"><div class="bh-card-num">'+c[1]+'</div><div class="bh-card-label">'+c[0]+'</div></div>';
+  }).join('');
+
+  // 体重趋势 SVG（取 daily_records 或 body_stats 的序列）
+  var series = dr.filter(function(r){return r.weight_kg!==null && r.weight_kg!==undefined;})
+                 .map(function(r){return [r.recorded_at, r.weight_kg];});
+  var svg = document.getElementById('weight-svg'), note = document.getElementById('weight-note');
+  if (series.length >= 2) {
+    var W=400, H=180, pad=24;
+    var xs = series.map(function(p){return p[1];});
+    var min = Math.min.apply(null,xs), max = Math.max.apply(null,xs);
+    if (max-min < 1) { max=min+1; }
+    var pts = series.map(function(p,i){
+      var x = pad + (W-2*pad) * i/(series.length-1);
+      var y = H-pad - (H-2*pad) * (p[1]-min)/(max-min);
+      return [x,y,p];
+    });
+    var path = pts.map(function(p,i){ return (i?'L':'M')+p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ');
+    var dots = pts.map(function(p){ return '<circle cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="3" fill="var(--bh-accent)"/>'; }).join('');
+    svg.innerHTML = '<path d="'+path+'" fill="none" stroke="var(--bh-accent-2)" stroke-width="2"/>' + dots;
+    note.textContent = series[0][0]+' → '+series[series.length-1][0]+'，'+min+'–'+max+' kg（目标 '+(cfg.target_weight_kg||'—')+' kg）';
+  } else {
+    note.textContent = '体重记录还不够画趋势，先连续记几天～';
+  }
+
+  // 最新一天代谢表
+  var last = dr.length? dr[dr.length-1] : null;
+  var rows = last ? [
+    ['日期', last.recorded_at],
+    ['活动水平', last.activity_level||'—'],
+    ['BMR / TDEE', (last.bmr||'—')+' / '+(last.tdee||'—')],
+    ['训练消耗', last.calories_burned||'—'],
+    ['净热量', last.net_calories===null||last.net_calories===undefined?'—':last.net_calories],
+    ['热量目标', last.calorie_target||'—']
+  ] : [['日期','—']];
+  document.getElementById('today').innerHTML = rows.map(function(r){
+    return '<tr><th>'+r[0]+'</th><td>'+r[1]+'</td></tr>';
+  }).join('');
+
+  // 最近饮食表
+  var keys = ['recorded_at','meal_type','food_name','portion','calories','protein'];
+  document.querySelector('#diet thead').innerHTML = '<tr>'+keys.map(function(k){return '<th>'+k+'</th>';}).join('')+'</tr>';
+  document.querySelector('#diet tbody').innerHTML = dl.slice(-8).reverse().map(function(r){
+    return '<tr>'+keys.map(function(k){var v=r[k]===null||r[k]===undefined?'—':String(r[k]);return '<td>'+v.replace(/</g,'&lt;')+'</td>';}).join('')+'</tr>';
+  }).join('');
+
+  // 目标进度条
+  document.getElementById('goals').innerHTML = goals.length ? goals.map(function(g){
+    var pct=null;
+    if (g.start_value!==undefined && g.target_value!==undefined && g.current_value!==undefined && g.start_value!==g.target_value) {
+      pct = Math.max(0, Math.min(100, (g.current_value-g.start_value)/(g.target_value-g.start_value)*100));
+    }
+    return '<div class="bh-goal"><b>'+g.name+'</b> <span class="bh-muted">'+(g.current_value!==undefined?g.current_value:'—')+' → '+g.target_value+' '+(g.unit||'')+(pct!==null?(' · '+Math.round(pct)+'%'):'')+'</span>'+
+           '<div class="bh-goalbar"><span style="width:'+(pct||0)+'%"></span></div></div>';
+  }).join('') : '<span class="bh-muted">还没有目标，跟助理说「设目标」。</span>';
+})();
+</script>
+</body>
+</html>
+
+/* 数据加载：先试同目录（面板经 URL 映射到存档区），失败回退 ../_save/dashboard/（lite 存档区） */
+(function boot(){
+  if (window.DASHBOARD_DATA !== undefined) { render(); return; }
+  var s = document.createElement('script');
+  s.src = '../_save/dashboard/data.js';
+  s.onload = function(){ render(); };
+  s.onerror = function(){ render(); };  // 两侧都没有 → render 显示"暂无数据"
+  document.head.appendChild(s);
+})();

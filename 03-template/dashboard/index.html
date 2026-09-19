@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><助理名> · 看板</title>
+<!-- 统一皮肤：收编区内指向总管面板皮肤；lite 模式自动回退本目录拷贝 -->
+<link rel="stylesheet" href="../../04-panel/skin/butler.css" id="skin">
+</head>
+<body>
+<header class="bh-header">
+  <div>
+    <h1 id="agent-name">…</h1>
+    <p class="bh-sub"><span id="agent-id"></span> · v<span id="agent-version"></span> · 数据更新于 <span id="generated-at"></span></p>
+  </div>
+  <span class="bh-badge" id="mode-badge">lite/托管</span>
+</header>
+
+<main class="bh-main">
+  <section class="bh-cards" id="cards"><!-- 数据卡片 --></section>
+  <section class="bh-panel">
+    <h2>最近记录</h2>
+    <table class="bh-table" id="recent"><thead></thead><tbody></tbody></table>
+  </section>
+  <section class="bh-panel">
+    <h2>说明</h2>
+    <p class="bh-muted">本看板零依赖零联网。数据由 <code>tools/data.py serve</code> 生成本地 data.js 注入；
+    收编状态下总管面板会自动收录本页（manifest.dashboard.up=true）。</p>
+  </section>
+</main>
+
+<!-- data.js 由 boot 链加载（本地或 ../_save/dashboard/） -->
+<script>
+// 皮肤回退：总管皮肤 404 时用本目录拷贝（lite 模式）
+document.getElementById('skin').addEventListener('error', function () {
+  this.setAttribute('href', 'butler.css');
+});
+function render() {
+  var D = window.DASHBOARD_DATA;
+  if (!D) { document.getElementById('agent-name').textContent = '暂无数据：先运行 tools/data.py serve'; return; }
+  document.getElementById('agent-name').textContent = D.agent.name;
+  document.getElementById('agent-id').textContent = D.agent.id;
+  document.getElementById('agent-version').textContent = D.agent.version;
+  document.getElementById('generated-at').textContent = (D.generated_at || '').replace('T', ' ');
+  var cards = document.getElementById('cards');
+  var firstTable = null, firstRows = [];
+  Object.keys(D.tables).forEach(function (t) {
+    var rows = D.tables[t] || [];
+    if (!firstTable && rows.length) { firstTable = t; firstRows = rows; }
+    var el = document.createElement('div');
+    el.className = 'bh-card';
+    el.innerHTML = '<div class="bh-card-num">' + rows.length + '</div><div class="bh-card-label">' + t + '</div>';
+    cards.appendChild(el);
+  });
+  var thead = document.querySelector('#recent thead');
+  var tbody = document.querySelector('#recent tbody');
+  if (firstRows.length) {
+    var keys = Object.keys(firstRows[firstRows.length - 1]).filter(function (k) { return k !== '_corrupt'; });
+    thead.innerHTML = '<tr>' + keys.map(function (k) { return '<th>' + k + '</th>'; }).join('') + '</tr>';
+    tbody.innerHTML = firstRows.slice(-10).reverse().map(function (r) {
+      return '<tr>' + keys.map(function (k) {
+        var v = r[k] === null || r[k] === undefined ? '—' : String(r[k]);
+        return '<td>' + v.replace(/</g, '&lt;') + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
+  } else {
+    tbody.innerHTML = '<tr><td colspan="8" class="bh-muted">还没有记录</td></tr>';
+  }
+}
+</script>
+</body>
+</html>
+
+/* 数据加载：先试同目录（面板经 URL 映射到存档区），失败回退 ../_save/dashboard/（lite 存档区） */
+(function boot(){
+  if (window.DASHBOARD_DATA !== undefined) { render(); return; }
+  var s = document.createElement('script');
+  s.src = '../_save/dashboard/data.js';
+  s.onload = function(){ render(); };
+  s.onerror = function(){ render(); };  // 两侧都没有 → render 显示"暂无数据"
+  document.head.appendChild(s);
+})();

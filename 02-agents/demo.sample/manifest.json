@@ -1,0 +1,74 @@
+{
+  "protocol": "agentcrew.protocol/v1",
+  "paradigm": "agentcrew.paradigm/v1",
+
+  "id": "demo.sample",
+  "name": "样板助理",
+  "version": "1.0.0",
+  "description": "日常小事备忘：随手记一句、随时查一笔、晚上提醒回顾。范式验收用最小积木。",
+  "author": "agentcrew",
+  "license": "MIT",
+
+  "domain": [
+    "日常小事与备忘的记录（记一下：……）",
+    "查询自己记过的事（我记过啥/上周记了什么）",
+    "晚间回顾提醒"
+  ],
+  "boundaries": [
+    "饮食与身体数据（归健身/健康助理）",
+    "花钱记账与预算（归财务助理）",
+    "多步骤行程与会议日程管理"
+  ],
+
+  "routing_examples": {
+    "positive": [
+      "记一下明天要还书",
+      "我上周都记过啥？",
+      "帮我记着：周三交水电费"
+    ],
+    "negative": [
+      "今天午饭吃了一碗牛肉面",
+      "打车花了35块",
+      "早上称了168斤"
+    ]
+  },
+
+  "capabilities": ["record", "query", "remind"],
+
+  "tables": [
+    {
+      "name": "notes",
+      "description": "随手记的一条小事",
+      "columns": [
+        {"name": "title",   "type": "string", "required": true},
+        {"name": "note",    "type": "string", "required": false},
+        {"name": "due_date", "type": "date",  "required": false, "description": "要办的日子（如有）"}
+      ]
+    }
+  ],
+
+  "tools": ["tools/data.py"],
+
+  "reminders": [
+    {
+      "name": "晚间回顾",
+      "rule": "每天晚上提醒主人：今天有什么要记一笔的吗",
+      "default_time": "21:30",
+      "message": "今天有什么要记一笔的吗？说一句就行～",
+      "priority": 2
+    }
+  ],
+
+  "dashboard": {
+    "main": "dashboard/index.html",
+    "up": true,
+    "data_endpoint": "tools/data.py serve"
+  },
+
+  "permissions": {
+    "net": false,
+    "write_outside_data": false
+  },
+
+  "onboarding": []
+}

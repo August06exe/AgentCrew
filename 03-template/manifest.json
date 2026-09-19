@@ -1,0 +1,72 @@
+{
+  "protocol": "agentcrew.protocol/v1",
+  "paradigm": "agentcrew.paradigm/v1",
+
+  "id": "yourname.your-assistant",
+  "name": "你的助理名",
+  "version": "0.1.0",
+  "description": "一句话说清这个助理帮主人管什么。",
+  "author": "yourname",
+  "license": "MIT",
+
+  "domain": [
+    "（管什么·1）",
+    "（管什么·2）"
+  ],
+  "boundaries": [
+    "（明确不管什么·1）"
+  ],
+
+  "routing_examples": {
+    "positive": [
+      "（主人会说的话·正例1）",
+      "（正例2）",
+      "（正例3）"
+    ],
+    "negative": [
+      "（不归我管的话·反例1）",
+      "（反例2）",
+      "（反例3）"
+    ]
+  },
+
+  "capabilities": ["record", "query"],
+
+  "tables": [
+    {
+      "name": "events",
+      "description": "通用事件表（示例，按需改）",
+      "columns": [
+        {"name": "title", "type": "string", "required": true},
+        {"name": "note", "type": "string", "required": false}
+      ]
+    }
+  ],
+
+  "tools": ["tools/data.py"],
+
+  "reminders": [
+    {
+      "name": "示例提醒",
+      "rule": "（完整人类语言，如：每天晚上九点提醒主人记录今天的事）",
+      "default_time": "21:00",
+      "message": "（单行提醒文案，像人话）",
+      "priority": 2
+    }
+  ],
+
+  "dashboard": {
+    "main": "dashboard/index.html",
+    "up": true,
+    "data_endpoint": "tools/data.py serve"
+  },
+
+  "permissions": {
+    "net": false,
+    "write_outside_data": false
+  },
+
+  "onboarding": [
+    {"q": "（启用这个助理时要问主人的问题）", "slot": "example_slot"}
+  ]
+}

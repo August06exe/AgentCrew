@@ -1,0 +1,21 @@
+{
+  "$comment": "主人档案模板。复制为 profile.json 后由初始化流程填写；本文件是格式权威。个人数据，gitignore 已忽略 01-master/profile.json",
+  "owner": {
+    "name": "",
+    "butler_name": "总管",
+    "timezone": "Asia/Shanghai",
+    "im_channel": ""
+  },
+  "persona": "伙伴",
+  "persona_custom": "",
+  "notifications": {
+    "window": "08:00-22:00",
+    "window_preset": "workday",
+    "dnd_extra": [],
+    "on_violation": "confirm"
+  },
+  "agents_enabled": [],
+  "export_format": "csv",
+  "created_at": "",
+  "onboarding_complete": false
+}

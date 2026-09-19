@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentCrew · 随行顾问团</title>
+<link rel="stylesheet" href="skin/butler.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">A</div>
+      <div>
+        <div class="name">AgentCrew</div>
+        <div class="sub">随行顾问团</div>
+      </div>
+    </div>
+
+    <div class="side-sec">顾 问 团</div>
+    <div class="side-agents" id="sideAgents"></div>
+
+    <div class="side-sec">管 理</div>
+    <nav class="side-nav" id="sideNav">
+      <div class="side-item" data-view="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        总览
+      </div>
+      <div class="side-item" data-view="data">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+        数据
+      </div>
+      <div class="side-item" data-view="install">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>
+        安装
+      </div>
+      <div class="side-item" data-view="onboarding">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
+        初始化
+      </div>
+    </nav>
+
+    <div class="side-foot">
+      <span id="footState">…</span><br>AgentCrew v1 · 仅本机
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="viewOverview" class="view">
+      <div class="topbar">
+        <div><h2>总览</h2><div class="sub">顾问团全家福 · 开关即生效，无需重启</div></div>
+      </div>
+
+      <div id="onboardTip" class="bh-panel" style="display:none;border-left:3px solid var(--bh-warn)">
+        <h2 style="color:var(--bh-warn)">还没完成初始化</h2>
+        <p class="bh-muted">总管在建档前只做引导不办正事。去 <a href="#onboarding">初始化页</a> 填表单，或在 IM 里跟总管聊着建档。</p>
+      </div>
+
+      <div id="saveAlert" class="bh-panel" style="display:none;border-left:3px solid var(--bh-bad);background:#F9EAE5">
+        <h2 style="color:var(--bh-bad)">存档告警：增量数据散落程序区</h2>
+        <p class="bh-muted" style="font-size:12.5px" id="saveAlertDetail"></p>
+        <button onclick="fixSave()">一键归档（migrate_save）</button>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="topbar" style="margin-top:6px">
+        <div><h2 style="font-size:17px">顾问团成员</h2></div>
+        <button onclick="nav('install')">＋ 安装新助理</button>
+      </div>
+      <div class="wall" id="wall"></div>
+    </div>
+
+    <div id="viewData" class="view" style="display:none">
+      <div class="topbar">
+        <div><h2>数据</h2><div class="sub">只读浏览 · 导出 CSV · 删除=移入该助理 data\trash 可恢复</div></div>
+      </div>
+      <div class="bh-panel">
+        <select id="dAgent" onchange="loadTables()"></select>
+        <select id="dTable" style="margin-left:10px" onchange="loadRows()"></select>
+        <button style="margin-left:10px" onclick="loadRows()">查看</button>
+        <a id="csvlink" style="margin-left:10px" href="#">导出 CSV</a>
+        <span class="bh-muted" style="margin-left:10px" id="dMeta"></span>
+      </div>
+      <div class="bh-panel">
+        <table class="bh-table" id="dRows"><thead></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div id="viewInstall" class="view" style="display:none">
+      <div class="topbar">
+        <div><h2>安装</h2><div class="sub">先预览档案、你确认后才收编；放归=移出收编区回 lite 独立模式</div></div>
+      </div>
+
+      <div class="bh-panel" style="border-left:3px solid var(--bh-accent)">
+        <h2 style="color:var(--bh-accent)">从模板新建（最快路径）</h2>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input type="text" id="nid" placeholder="id：作者.名字（如 demo.reading）" style="flex:1;min-width:200px">
+          <input type="text" id="nname" placeholder="助理名字（如 读书助理）" style="flex:1;min-width:140px">
+        </div>
+        <input type="text" id="ndesc" placeholder="一句话描述它帮主人管什么" style="width:100%;margin-top:10px">
+        <button onclick="createFromTemplate()" style="margin-top:10px">生成并收编</button>
+      </div>
+
+      <div class="bh-panel">
+        <h2>来源 A · 上传 zip 包</h2>
+        <input type="file" id="zipfile" accept=".zip">
+      </div>
+      <div class="bh-panel">
+        <h2>来源 B · 本地文件夹</h2>
+        <input type="text" id="fpath" placeholder="例如 D:\Downloads\some-agent" style="width:60%">
+      </div>
+      <div class="bh-panel">
+        <h2>来源 C · git 仓库地址</h2>
+        <input type="text" id="gurl" placeholder="https://github.com/xxx/some-agent" style="width:60%">
+        <p class="bh-muted">预览阶段只读档案不运行任何包内代码；确认收编后才会执行工具自检。</p>
+      </div>
+      <div class="bh-panel">
+        <button onclick="doPreview()">生成预览</button>
+      </div>
+      <div class="bh-panel" id="previewBox" style="display:none">
+        <h2>预览</h2>
+        <table class="bh-table" id="ptable"></table>
+        <div id="pwarn" class="bh-warn" style="margin-top:10px"></div>
+        <button onclick="doConfirm()" style="margin-top:10px">确认收编</button>
+      </div>
+      <div class="bh-panel">
+        <h2>已收编 · 放归管理</h2>
+        <table class="bh-table" id="iList"><thead><tr><th>id</th><th>名称</th><th>状态</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div id="viewOnboarding" class="view" style="display:none">
+      <div class="topbar">
+        <div><h2>初始化</h2><div class="sub">和 IM 两轮聊天殊途同归：都写同一份 01-master\profile.json</div></div>
+      </div>
+      <div class="bh-panel">
+        <h2>必填</h2>
+        <table class="bh-table">
+          <tr><th>怎么称呼你</th><td><input id="f_name" placeholder="昵称即可"></td></tr>
+          <tr><th>给管家起个名</th><td><input id="f_butler" placeholder="可选，缺省就叫「总管」"></td></tr>
+          <tr><th>语言风格</th><td>
+            <select id="f_persona" onchange="personaCustom()">
+              <option value="伙伴">A 轻松伙伴（像朋友聊天，默认）</option>
+              <option value="英式管家">B 英式老管家（称「主人」，克制周全）</option>
+              <option value="中式总管">C 中式大总管（称「您」，稳重干练）</option>
+              <option value="自定义">自定义——按我说的来</option>
+            </select><br>
+            <input id="f_persona_custom" placeholder="比如：叫我老板，说话短一点，少用表情" style="width:70%;margin-top:6px;display:none">
+          </td></tr>
+          <tr><th>定时消息可推送时段</th><td>
+            <select id="f_window" onchange="windowCustom()">
+              <option value="08:00-22:00|workday">A 早8点 – 晚10点（默认）</option>
+              <option value="09:00-20:00|early">B 早9点 – 晚8点</option>
+              <option value="all_day|all_day">C 全天随时</option>
+              <option value="custom|custom">自定义时段</option>
+            </select><br>
+            <input id="f_window_custom" placeholder="如 08:30-23:00" style="width:40%;margin-top:6px;display:none">
+          </td></tr>
+          <tr><th>启用哪些顾问</th><td id="f_agents">（加载中…）</td></tr>
+        </table>
+      </div>
+      <div class="bh-panel">
+        <h2>选填</h2>
+        <table class="bh-table">
+          <tr><th>额外勿扰</th><td><input id="f_dnd_extra" placeholder="如 12:00-14:00（多个用逗号隔开），可留空"></td></tr>
+          <tr><th>常用 IM</th><td><input id="f_im" placeholder="微信 / Telegram / …（平时在哪说话就填哪）"></td></tr>
+          <tr><th>导出格式偏好</th><td><select id="f_exp"><option value="csv">CSV</option><option value="json">JSON</option></select></td></tr>
+        </table>
+      </div>
+      <div class="bh-panel">
+        <button onclick="saveProfile()">保存档案并完成初始化</button>
+        <span class="bh-muted" id="obState" style="margin-left:10px"></span>
+      </div>
+    </div>
+  </main>
+
+  <nav class="tabbar" id="tabbar">
+    <div class="tb" data-view="overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      总览
+    </div>
+    <div class="tb" data-view="data">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+      数据
+    </div>
+    <div class="tb" data-view="install">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>
+      安装
+    </div>
+    <div class="tb" data-view="onboarding">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
+      初始化
+    </div>
+  </nav>
+</div>
+
+<div id="toast" style="display:none"></div>
+
+<script src="panel-lib.js"></script>
+<script>
+/* ================= 公共 ================= */
+function el(id){ return document.getElementById(id); }
+function esc(s){ return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function toast(msg, bad){
+  const t = el('toast');
+  t.textContent = msg; t.style.display = 'block';
+  t.style.color = bad ? 'var(--bh-bad)' : 'var(--bh-good)';
+  setTimeout(()=>{ t.style.display='none'; }, 4000);
+}
+async function api(path, body){
+  const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {};
+  const r = await fetch(path, opt);
+  return r.json();
+}
+
+/* ================= 路由 ================= */
+function nav(view){ location.hash = '#' + view; }
+window.addEventListener('hashchange', showView);
+function showView(){
+  const v = (location.hash || '#overview').slice(1);
+  for (const s of document.querySelectorAll('.view')) s.style.display = 'none';
+  const target = el('view' + v.charAt(0).toUpperCase() + v.slice(1));
+  if (target) target.style.display = 'block';
+  document.querySelectorAll('.side-item, .tabbar .tb').forEach(x=>
+    x.classList.toggle('active', x.dataset.view === v));
+}
+document.querySelectorAll('.side-item, .tabbar .tb').forEach(x=>
+  x.addEventListener('click', ()=>nav(x.dataset.view)));
+
+/* ================= 状态与侧栏 ================= */
+let STATE = null;
+async function loadState(){
+  STATE = await api('/api/state');
+  renderSidebar();
+  return STATE;
+}
+function ledClass(a){
+  if (a.status === 'active') return 'led on';
+  if (a.status === 'paused') return 'led paused';
+  return 'led';
+}
+function renderSidebar(){
+  el('sideAgents').innerHTML = STATE.agents.map(a=>`
+    <div class="side-agent" title="${esc(a.id)}">
+      <span class="${ledClass(a)}"></span>
+      <span class="nm">${esc(a.name)}<small>${esc(a.status==='active'?'运行中':a.status==='paused'?'已暂停':'未登记')}</small></span>
+      ${a.status!=='unregistered'?`
+      <label class="sw" onclick="event.stopPropagation()">
+        <input type="checkbox" ${a.status==='active'?'checked':''} onchange="toggleAgent('${esc(a.id)}', this)">
+        <span class="track"><span class="knob"></span></span>
+      </label>`:''}
+    </div>`).join('') || '<div class="side-agent"><span class="bh-muted" style="font-size:12px">还没有助理</span></div>';
+  el('footState').textContent = STATE.profile.complete
+    ? '主人：' + ((STATE.profile.profile.owner||{}).name || '已建档')
+    : '未初始化';
+}
+
+/* ================= 总览 ================= */
+let REMINDERS = {};
+async function renderOverview(){
+  const w = STATE.save_watch;
+  if (w && w.violations && w.violations.length) {
+    el('saveAlert').style.display = 'block';
+    el('saveAlertDetail').textContent = w.violations.join('；');
+  } else {
+    el('saveAlert').style.display = 'none';
+  }
+  const active = STATE.agents.filter(a=>a.status==='active').length;
+  el('stats').innerHTML = [
+    ['顾问团人数', STATE.agents.length],
+    ['运行中', active],
+    ['提醒规则', '…'],
+    ['初始化', STATE.profile.complete?'完成':'待建档'],
+  ].map(x=>`<div class="stat"><div class="lb">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
+
+  el('wall').innerHTML = STATE.agents.map(a=>`
+    <div class="acard">
+      <div class="hd">
+        <div class="avatar ${a.status==='active'?'':'green'}"><span class="avatar-letter">${esc((a.name||'?')[0])}</span></div>
+        <div class="who"><b>${esc(a.name)}</b><small>${esc(a.id)} · v${esc(a.version)}</small></div>
+        ${a.status!=='unregistered'?`
+        <label class="sw" title="运行 / 暂停">
+          <input type="checkbox" ${a.status==='active'?'checked':''} onchange="toggleAgent('${esc(a.id)}', this)">
+          <span class="track"><span class="knob"></span></span>
+        </label>`:''}
+      </div>
+      <div class="meta"><span class="${ledClass(a)}"></span>${a.status==='active'?'运行中':esc(a.status)} · ${a.mode==='managed'?'托管':'lite'}${a.reminders_enabled===false?' · 提醒已关':''}</div>
+      <div class="desc">${esc((a.domain||[]).join('；'))}</div>
+      <div class="ops">
+        ${a.dashboard && a.dashboard.up && a.dashboard.main
+          ? `<button onclick="location.href='/jump/${encodeURIComponent(a.id)}'">打开看板</button>` : ''}
+        <button onclick="gotoData('${esc(a.id)}')">数据</button>
+        <span class="spacer"></span>
+        <span class="bh-muted" style="font-size:11px">${(a.tables||[]).length} 张表</span>
+      </div>
+    </div>`).join('')
+    + `<div class="ghost" onclick="nav('install')">＋ 从模板新建，或安装 zip / 文件夹 / git 地址</div>`;
+
+  await Promise.all(STATE.agents.map(async a=>{
+    try {
+      const r = await fetch('/agent-file/' + encodeURIComponent(a.id) + '/manifest.json');
+      const m = await r.json();
+      REMINDERS[a.id] = m.reminders || [];
+    } catch(e) { REMINDERS[a.id] = []; }
+  }));
+  const total = Object.values(REMINDERS).reduce((s,r)=>s+r.length, 0);
+  const statV = el('stats').children[2].querySelector('.v');
+  if (statV) statV.textContent = total;
+}
+async function toggleAgent(id, checkbox){
+  const wantOn = checkbox.checked;
+  checkbox.disabled = true;
+  const r = await api('/api/agent/' + encodeURIComponent(id) + '/toggle', {});
+  checkbox.disabled = false;
+  if (!r.ok) { checkbox.checked = !wantOn; toast(r.error||'失败', true); return; }
+  toast(id + ' → ' + (r.status==='active'?'运行中':'已暂停'));
+  await loadState();
+  const active = STATE.agents.filter(a=>a.status==='active').length;
+  const statV = el('stats').children[1].querySelector('.v');
+  if (statV) statV.textContent = active;
+}
+async function fixSave(){
+  const r = await api('/api/save-migrate', {});
+  toast(r.ok ? ('归档完成：迁移 ' + (r.moved_count??'?') + ' 项，页面即将刷新') : (r.error||'失败'), !r.ok);
+  if (r.ok) setTimeout(()=>location.reload(), 1500);
+}
+function gotoData(id){
+  nav('data');
+  setTimeout(()=>{ el('dAgent').value = id; loadTables(); }, 300);
+}
+
+/* ================= 数据 ================= */
+const CUR = {agent:null, table:null};
+async function loadTables(){
+  const id = el('dAgent').value;
+  const r = await fetch('/agent-file/' + encodeURIComponent(id) + '/manifest.json');
+  const m = await r.json();
+  el('dTable').innerHTML = (m.tables||[]).map(t=>`<option>${esc(t.name)}</option>`).join('');
+  loadRows();
+}
+async function loadRows(){
+  CUR.agent = el('dAgent').value; CUR.table = el('dTable').value;
+  const r = await api(`/api/agent/${encodeURIComponent(CUR.agent)}/table/${encodeURIComponent(CUR.table)}`);
+  if (!r.ok) { toast(r.error||'读取失败', true); return; }
+  const rows = r.rows.filter(x=>!x._derived);
+  const keys = [];
+  rows.forEach(x=>Object.keys(x).forEach(k=>{ if(!keys.includes(k)) keys.push(k); }));
+  el('csvlink').href = `/api/agent/${encodeURIComponent(CUR.agent)}/export/${encodeURIComponent(CUR.table)}.csv`;
+  el('dMeta').textContent = rows.length + ' 行';
+  document.querySelector('#dRows thead').innerHTML = '<tr>' + keys.map(k=>`<th>${esc(k)}</th>`).join('') + '<th></th></tr>';
+  document.querySelector('#dRows tbody').innerHTML = rows.slice().reverse().map(row=>
+    '<tr>' + keys.map(k=>`<td>${esc(row[k])}</td>`).join('')
+    + `<td><button onclick="delRow('${esc(row._id||'')}')">删</button></td></tr>`
+  ).join('') || '<tr><td colspan="9" class="bh-muted">空表</td></tr>';
+}
+async function delRow(rowId){
+  if (!rowId) { toast('该行没有 _id，去文件里删', true); return; }
+  if (!confirm('删除这一条？（先移入该助理 data\\trash，可人工恢复）')) return;
+  const r = await api(`/api/agent/${encodeURIComponent(CUR.agent)}/delete_row`, {table: CUR.table, row_id: rowId});
+  toast(r.ok ? '已删除（进 trash）' : (r.error||'失败'), !r.ok);
+  if (r.ok) loadRows();
+}
+
+/* ================= 安装 ================= */
+let TOKEN = null;
+async function doPreview(){
+  const body = {mode:null};
+  if (el('zipfile').files[0]) {
+    body.mode = 'zip'; body.filename = el('zipfile').files[0].name;
+    body.b64 = await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.readAsDataURL(el('zipfile').files[0]); });
+  } else if (el('fpath').value) { body.mode='path'; body.path = el('fpath').value; }
+  else if (el('gurl').value) { body.mode='git'; body.url = el('gurl').value; }
+  else { toast('先填一种来源', true); return; }
+  const r = await api('/api/install/preview', body);
+  if (!r.ok) { toast(r.error||'预览失败', true); return; }
+  TOKEN = r.token;
+  const p = r.preview;
+  el('ptable').innerHTML = [
+    ['id', p.id], ['名称', p.name], ['版本', p.version], ['作者', p.author],
+    ['说明', p.description], ['领域', (p.domain||[]).join('；')],
+    ['数据表', (p.tables||[]).join('、')], ['提醒', (p.reminders||[]).join('；')],
+    ['联网权限', p.net_permission ? '⚠️ 声明了联网（注意）' : '无（推荐）']
+  ].map(x=>`<tr><th>${esc(x[0])}</th><td>${esc(x[1])}</td></tr>`).join('');
+  const issues = [...(r.schema_problems||[]), ...(r.schema_warnings||[])];
+  el('pwarn').textContent = issues.length ? ('校验提示：' + issues.join('；')) : 'schema 校验无问题';
+  el('previewBox').style.display = 'block';
+}
+async function doConfirm(){
+  if (!TOKEN) { toast('先预览', true); return; }
+  const r = await api('/api/install/confirm', {token: TOKEN});
+  TOKEN = null;
+  toast(r.ok ? ('安装成功：' + (r.adopted||'')) : (r.error||'收编失败'), !r.ok);
+  if (r.ok) setTimeout(()=>location.reload(), 1200);
+}
+async function createFromTemplate(){
+  const id = el('nid').value.trim(), name = el('nname').value.trim(), desc = el('ndesc').value.trim();
+  if (!id || !name || !desc) { toast('id / 名字 / 描述都要填', true); return; }
+  const r = await api('/api/create-from-template', {id, name, description: desc});
+  toast(r.ok ? ('已创建并收编：' + r.created) : (r.error || '失败'), !r.ok);
+  if (r.ok) setTimeout(()=>location.reload(), 1200);
+}
+function renderInstallList(){
+  document.querySelector('#iList tbody').innerHTML = STATE.agents.map(a=>`
+    <tr><td>${esc(a.id)}</td><td>${esc(a.name)}</td><td>${esc(a.status)}</td>
+    <td>${a.status!=='unregistered'?`<button onclick="rel('${esc(a.id)}')">放归</button>`:''}</td></tr>`).join('');
+}
+async function rel(id){
+  if (!confirm(`放归 ${id}？它会移出收编区（到仓库同级 _standalone），回 lite 独立模式，数据随它走。`)) return;
+  const r = await api('/api/release', {id});
+  toast(r.ok ? '已放归' : (r.error||'失败'), !r.ok);
+  if (r.ok) setTimeout(()=>location.reload(), 1000);
+}
+
+/* ================= 初始化 ================= */
+function personaCustom(){
+  el('f_persona_custom').style.display = el('f_persona').value === '自定义' ? 'block' : 'none';
+}
+function windowCustom(){
+  el('f_window_custom').style.display = el('f_window').value.split('|')[1] === 'custom' ? 'block' : 'none';
+}
+function renderAgentCheckboxes(){
+  el('f_agents').innerHTML = (STATE.agents||[]).map(a=>`
+    <label style="margin-right:14px;font-size:13px">
+      <input type="checkbox" value="${esc(a.id)}" checked> ${esc(a.name)}
+    </label>`).join('') || '<span class="bh-muted">当前没有顾问</span>';
+}
+async function initOnboarding(){
+  renderAgentCheckboxes();
+  if (STATE.profile.exists) {
+    const p = STATE.profile.profile || {};
+    el('f_name').value = (p.owner||{}).name || '';
+    el('f_butler').value = (p.owner||{}).butler_name || '';
+    el('f_im').value = (p.owner||{}).im_channel || '';
+    const persona = p.persona || '伙伴';
+    el('f_persona').value = ['伙伴','英式管家','中式总管'].includes(persona) ? persona : '自定义';
+    if (el('f_persona').value === '自定义') {
+      el('f_persona_custom').style.display = 'block';
+      el('f_persona_custom').value = p.persona_custom || '';
+    }
+    const n = p.notifications || {};
+    const preset = n.window_preset || 'workday';
+    const map = {workday:'08:00-22:00|workday', early:'09:00-20:00|early', all_day:'all_day|all_day'};
+    el('f_window').value = map[preset] || 'custom|custom';
+    if (el('f_window').value === 'custom|custom') {
+      el('f_window_custom').style.display = 'block';
+      el('f_window_custom').value = n.window || '';
+    }
+    el('f_dnd_extra').value = (n.dnd_extra||[]).join(', ');
+    el('f_exp').value = p.export_format || 'csv';
+    el('obState').textContent = STATE.profile.complete ? '已完成初始化（再次保存即更新档案）' : '档案存在但未完成';
+  } else {
+    el('obState').textContent = '尚未建档';
+  }
+}
+async function saveProfile(){
+  const name = el('f_name').value.trim();
+  if (!name) { toast('总得告诉我怎么称呼你吧', true); return; }
+  const persona = el('f_persona').value;
+  if (persona === '自定义' && !el('f_persona_custom').value.trim()) {
+    toast('自定义风格得说说你要什么样的', true); return;
+  }
+  const [win, preset] = el('f_window').value.split('|');
+  let window = win;
+  if (preset === 'custom') {
+    window = el('f_window_custom').value.trim();
+    if (!/^([01]\d|2[0-3]):[0-5]\d\s*[-–~至到]\s*([01]\d|2[0-3]):[0-5]\d$/.test(window)
+        && window !== 'all_day') {
+      toast('时段格式：HH:MM-HH:MM（如 08:30-23:00）', true); return;
+    }
+  }
+  const dnd = el('f_dnd_extra').value.trim()
+    ? el('f_dnd_extra').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean) : [];
+  const agents = [...el('f_agents').querySelectorAll('input:checked')].map(x=>x.value);
+  const profile = {
+    owner: {
+      name,
+      butler_name: el('f_butler').value.trim() || '总管',
+      timezone: 'Asia/Shanghai',
+      im_channel: el('f_im').value.trim() || ''
+    },
+    persona: persona === '自定义' ? '自定义' : persona,
+    persona_custom: persona === '自定义' ? el('f_persona_custom').value.trim() : '',
+    notifications: { window, window_preset: preset, dnd_extra: dnd, on_violation: 'confirm' },
+    agents_enabled: agents,
+    export_format: el('f_exp').value,
+    created_at: new Date().toISOString(),
+    onboarding_complete: true
+  };
+  const r = await api('/api/profile', {profile});
+  toast(r.ok ? '档案已保存，总管正式上岗！' : (r.error||'保存失败'), !r.ok);
+}
+
+/* ================= 启动 ================= */
+(async function boot(){
+  showView();
+  await loadState();
+  el('dAgent').innerHTML = STATE.agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}（${esc(a.id)}）</option>`).join('');
+  el('dAgent').onchange = loadTables;
+  if (STATE.agents.length) loadTables();
+  await renderOverview();
+  renderInstallList();
+  initOnboarding();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+# ---- 个人数据永不进仓库 ----
+**/data/*
+!**/data/.gitkeep
+02-agents/*/reports/
+*.db
+*.sqlite3
+
+# ---- 运行产物 ----
+__pycache__/
+*.pyc
+.pytest_cache/
+06-tests/tmp/
+*.log
+
+# ---- 本机环境 ----
+.env
+Thumbs.db
+.DS_Store
+
+# ---- 实例态（个人数据）----
+01-master/profile.json
+01-master/registry.json
+
+# ---- zcode 工作区文件不进仓库 ----
+.zcode/
+
+# ---- 看板运行时数据（含个人数据，不进仓库）----
+**/dashboard/data.js
+**/dashboard/data.json
+01-master/inbox-master/
+01-master/authorizations.jsonl
+01-master/releases.jsonl
+_master-inbox/
+_standalone/
+
+# ---- 运行时信箱产物（实例状态）不进仓库 ----
+**/inbox/*.json
+**/inbox/done/*.json
+**/outbox/*.json
+**/data/reports/
+
+# ---- 测试沙箱 ----
+06-tests/_sandbox/
+02-agents/*/tests/_sandbox/
+
+# ---- 仓库内本地参考/放归区（实例态，绝不进仓库）----
+_local/
+_standalone/
+
+# ---- 存档区（增量信息唯一居所）----
+_save/
+
+# ---- 开发运营痕迹（仅本地，不公开发布）----
+07-ops/
+
+# ---- 助理开发文档（验尸/迁移分析，仅本地）----
+02-agents/*/docs/

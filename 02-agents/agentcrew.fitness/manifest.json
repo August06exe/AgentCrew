@@ -1,0 +1,515 @@
+{
+  "protocol": "agentcrew.protocol/v1",
+  "paradigm": "agentcrew.paradigm/v1",
+  "id": "agentcrew.fitness",
+  "name": "健身助理",
+  "version": "1.0.0",
+  "description": "聊天式健身追踪：说人话记饮食/体重/睡眠/训练，自动算营养与代谢（BMR/TDEE），盯每日蛋白与热量缺口目标，早晚提醒+周报看板。",
+  "author": "agentcrew",
+  "license": "MIT",
+  "domain": [
+    "体重与身体数据的记录与趋势",
+    "饮食记录与营养估算（基于自家食物库）",
+    "睡眠时长与每日活动水平记录",
+    "训练记录（动作/重量/组次/RPE）",
+    "每日代谢与目标计算（BMR/TDEE/蛋白目标/热量缺口）",
+    "减脂或增肌里程碑目标追踪",
+    "晨间称重提醒、晚间数据完整性检查、每周周报"
+  ],
+  "boundaries": [
+    "医疗、用药、伤病诊断与治疗建议",
+    "食物过敏与食品安全判断",
+    "制定正式训练计划或充当教练（只做记录、计算与客观趋势陈述）",
+    "餐饮花费记账（归财务助理）"
+  ],
+  "routing_examples": {
+    "positive": [
+      "早上称了168斤",
+      "早餐吃了3个鸡蛋一杯牛奶",
+      "今天练了胸，卧推80kg做了5组5次",
+      "昨晚睡了7个小时",
+      "今天在家躺了一天没出门",
+      "我这周减了多少？"
+    ],
+    "negative": [
+      "午饭花了32块钱",
+      "帮我记一下明天还书",
+      "我膝盖疼要不要去医院",
+      "帮我订明天下午的健身房场地"
+    ]
+  },
+  "capabilities": [
+    "record",
+    "query",
+    "report",
+    "remind"
+  ],
+  "tables": [
+    {
+      "name": "diet_logs",
+      "description": "每餐饮食明细（一句话可拆多行，每食物一行）",
+      "columns": [
+        {
+          "name": "meal_type",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "breakfast",
+            "lunch",
+            "dinner",
+            "snack"
+          ]
+        },
+        {
+          "name": "food_name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "portion",
+          "type": "string",
+          "required": false,
+          "description": "分量描述，如 150g/一碗/两个"
+        },
+        {
+          "name": "grams_est",
+          "type": "number",
+          "required": false,
+          "unit": "g",
+          "description": "估算克重"
+        },
+        {
+          "name": "calories",
+          "type": "number",
+          "required": false,
+          "unit": "kcal"
+        },
+        {
+          "name": "protein",
+          "type": "number",
+          "required": false,
+          "unit": "g"
+        },
+        {
+          "name": "carbs",
+          "type": "number",
+          "required": false,
+          "unit": "g"
+        },
+        {
+          "name": "fat",
+          "type": "number",
+          "required": false,
+          "unit": "g"
+        },
+        {
+          "name": "template_id",
+          "type": "string",
+          "required": false,
+          "description": "引用 meal_templates._id"
+        },
+        {
+          "name": "raw_text",
+          "type": "string",
+          "required": false,
+          "description": "主人原话"
+        }
+      ]
+    },
+    {
+      "name": "workouts",
+      "description": "训练明细",
+      "columns": [
+        {
+          "name": "exercise",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "weight_kg",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "sets",
+          "type": "integer",
+          "required": false
+        },
+        {
+          "name": "reps",
+          "type": "integer",
+          "required": false
+        },
+        {
+          "name": "rpe",
+          "type": "number",
+          "required": false,
+          "description": "自感强度1-10"
+        },
+        {
+          "name": "muscle_group",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "calories_burned",
+          "type": "number",
+          "required": false,
+          "unit": "kcal"
+        },
+        {
+          "name": "rest_day",
+          "type": "boolean",
+          "required": false,
+          "description": "true=今天没练（主人明说时记一条）"
+        },
+        {
+          "name": "raw_text",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "body_stats",
+      "description": "体重等身体数据历史",
+      "columns": [
+        {
+          "name": "weight_kg",
+          "type": "number",
+          "required": true,
+          "unit": "kg"
+        },
+        {
+          "name": "raw_text",
+          "type": "string",
+          "required": false,
+          "description": "如：168.1斤"
+        }
+      ]
+    },
+    {
+      "name": "sleep_records",
+      "description": "睡眠时长",
+      "columns": [
+        {
+          "name": "hours",
+          "type": "number",
+          "required": true,
+          "unit": "h"
+        }
+      ]
+    },
+    {
+      "name": "food_library",
+      "description": "食物营养库（每100g），记录中自动扩充",
+      "columns": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "calories_per_100g",
+          "type": "number",
+          "required": true,
+          "unit": "kcal"
+        },
+        {
+          "name": "protein_per_100g",
+          "type": "number",
+          "required": true,
+          "unit": "g"
+        },
+        {
+          "name": "carbs_per_100g",
+          "type": "number",
+          "required": false,
+          "unit": "g"
+        },
+        {
+          "name": "fat_per_100g",
+          "type": "number",
+          "required": false,
+          "unit": "g"
+        },
+        {
+          "name": "common_portion",
+          "type": "string",
+          "required": false,
+          "description": "常见分量参照，如 一碗≈200g"
+        }
+      ]
+    },
+    {
+      "name": "meal_templates",
+      "description": "常用餐食模板（一键记录整餐）",
+      "columns": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "items_json",
+          "type": "string",
+          "required": true,
+          "description": "JSON数组：[{food_name,portion,grams_est,calories,protein,carbs,fat}]"
+        },
+        {
+          "name": "total_calories",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "total_protein",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "use_count",
+          "type": "integer",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "goals",
+      "description": "里程碑目标",
+      "columns": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "timeframe",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "daily",
+            "weekly",
+            "monthly",
+            "quarterly",
+            "yearly",
+            "long"
+          ]
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false,
+          "enum": [
+            "body",
+            "strength",
+            "training",
+            "sleep"
+          ]
+        },
+        {
+          "name": "metric",
+          "type": "string",
+          "required": true,
+          "description": "weight_kg/calories/protein_g/bench_press/sessions_per_week…"
+        },
+        {
+          "name": "target_value",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "start_value",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "current_value",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "unit",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "end_date",
+          "type": "date",
+          "required": false
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false,
+          "enum": [
+            "active",
+            "completed",
+            "abandoned"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "daily_records",
+      "description": "【派生表】每天一行：体重/睡眠/摄入汇总/活动水平/BMR/TDEE/训练消耗/目标/净热量。由 tools/daily.py rebuild 全量重建，勿手改",
+      "columns": [
+        {
+          "name": "weight_kg",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "sleep_hours",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "total_calories",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "total_protein",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "total_carbs",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "total_fat",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "activity_level",
+          "type": "string",
+          "required": false,
+          "enum": [
+            "bed",
+            "sedentary",
+            "light",
+            "moderate",
+            "heavy",
+            "very_heavy"
+          ]
+        },
+        {
+          "name": "bmr",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "tdee",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "calories_burned",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "protein_target",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "calorie_target",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "net_calories",
+          "type": "number",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "tools": [
+    "tools/data.py",
+    "tools/nutrition.py",
+    "tools/daily.py",
+    "tools/report.py",
+    "tools/migrate_from_fitmate.py"
+  ],
+  "reminders": [
+    {
+      "name": "晨间称重提醒",
+      "rule": "每天早上提醒主人称体重；如果主人已过点未称，顺带温和提一句",
+      "default_time": "08:30",
+      "message": "早呀～该上秤啦，站上去就知道这周的趋势～",
+      "priority": 1
+    },
+    {
+      "name": "晚间数据检查",
+      "rule": "每天晚上检查今天的体重/饮食/睡眠/活动水平记了没，只提醒最缺的一项（优先级：体重>饮食>睡眠>活动水平）；如果都记了，就报一句当日营养总结",
+      "default_time": "21:00",
+      "message": "今天的数据还没齐哦，跟我补一句就行～",
+      "when_data_missing": [
+        "body_stats",
+        "diet_logs",
+        "sleep_records",
+        "daily_records"
+      ],
+      "priority": 1
+    },
+    {
+      "name": "周报",
+      "rule": "每周日晚上生成本周健身周报（体重趋势/日均摄入/日均缺口/训练天数/目标进度）",
+      "default_time": "20:00",
+      "message": "本周健身周报出炉啦，看板已更新～",
+      "priority": 2
+    }
+  ],
+  "dashboard": {
+    "main": "dashboard/index.html",
+    "up": true,
+    "data_endpoint": "tools/data.py serve"
+  },
+  "permissions": {
+    "net": false,
+    "write_outside_data": false
+  },
+  "onboarding": [
+    {
+      "q": "您的身高（cm）？",
+      "slot": "height_cm"
+    },
+    {
+      "q": "年龄？（算基础代谢用）",
+      "slot": "age"
+    },
+    {
+      "q": "生理性别？（男女，算基础代谢用）",
+      "slot": "sex"
+    },
+    {
+      "q": "目标体重多少 kg？",
+      "slot": "target_weight_kg"
+    },
+    {
+      "q": "大概什么时候到？",
+      "slot": "target_date"
+    },
+    {
+      "q": "每天想留多少热量缺口？（不知道就默认 500）",
+      "slot": "daily_deficit"
+    },
+    {
+      "q": "每公斤体重每天吃多少克蛋白？（不知道就默认 1.6）",
+      "slot": "protein_g_per_kg"
+    }
+  ],
+  "first_run": [
+    "tools/nutrition.py import-seed"
+  ]
+}

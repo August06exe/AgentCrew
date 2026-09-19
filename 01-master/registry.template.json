@@ -1,0 +1,16 @@
+{
+  "$comment": "收编清单模板。复制为 registry.json 后由 scripts/adopt.py 维护；gitignored（实例状态）。",
+  "$schema": "agentcrew.registry/v1",
+  "master_instance": "",
+  "adopted": [
+    {
+      "id": "demo.sample",
+      "dir": "02-agents/sample",
+      "version": "1.0.0",
+      "status": "active",
+      "adopted_at": "",
+      "reminders_enabled": true,
+      "notes": ""
+    }
+  ]
+}

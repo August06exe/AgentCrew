@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>健身周报</title>
+<link rel="stylesheet" href="../../04-panel/skin/butler.css" id="skin">
+<style>
+  /* ======== 遵循 dashboard/DESIGN.md v2（warm-editorial 浅色版）======== */
+  :root{
+    --paper:#FAF7F2; --card:#FFFFFF; --ink:#1C1A17; --muted:#8A817A;
+    --line:rgba(28,26,23,.12); --empty:#EAE4DB;
+    --gold:#C0512F;            /* 赤陶土主强调（沿用变量名） */
+    --accent2:#2F5B4F;         /* 森林绿 */
+    --good:#2F5B4F; --warn:#B08968; --bad:#A63D2F;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    line-height:1.6;font-variant-numeric:tabular-nums}
+  .page{max-width:860px;margin:0 auto;padding:32px 20px 56px}
+
+  .rep-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px}
+  .rep-title{font-family:Georgia,"Times New Roman","Songti SC",serif;
+    font-size:30px;font-weight:700;letter-spacing:-.01em}
+  .rep-range{color:var(--muted);font-size:13px;margin-top:2px}
+  .week-nav{display:flex;gap:8px;align-items:center}
+  .week-nav button{background:var(--card);border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:4px 12px;cursor:pointer;font-size:14px}
+  .week-nav button:hover{border-color:var(--gold);color:var(--gold)}
+  .week-now{color:var(--gold);font-size:15px;font-weight:600;min-width:64px;text-align:center;
+    font-family:Georgia,serif}
+
+  .coach{background:var(--card);border:1px solid rgba(47,91,79,.08);border-left:3px solid var(--gold);
+    border-radius:12px;padding:14px 18px;margin:18px 0;font-size:14px}
+  .coach b{color:var(--accent2);font-weight:600;margin-right:8px}
+
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:18px 0}
+  @media(max-width:720px){
+  .kpis{grid-template-columns:repeat(2,1fr);gap:10px}
+  .kpi{padding:12px 14px}
+  .kpi .num{font-size:22px;white-space:nowrap}
+  .rep-title{font-size:24px}
+}
+  .kpi{background:var(--card);border:1px solid rgba(47,91,79,.08);
+    border-radius:12px;padding:16px 18px}
+  .kpi .lb{color:var(--muted);font-size:12px}
+  .kpi .num{font-family:Georgia,"Times New Roman","Songti SC",serif;
+    font-size:32px;font-weight:700;margin:2px 0}
+  .kpi .num.gold{color:var(--gold)}
+  .kpi .sub{color:var(--muted);font-size:12px}
+
+  .block{background:var(--card);border:1px solid rgba(47,91,79,.08);
+    border-radius:12px;padding:18px 20px;margin-top:16px}
+  .block h3{margin:0 0 12px;font-size:14px;color:var(--accent2);font-weight:600;
+    display:flex;justify-content:space-between;align-items:baseline}
+  .block h3 .aux{font-size:12px;color:var(--muted);font-weight:400}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+
+  svg{width:100%;display:block}
+  .bars{display:flex;align-items:flex-end;gap:10px;height:150px;padding-top:8px}
+  .bar-w{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end}
+  .bar-w .val{font-size:11px;color:var(--muted);margin-bottom:4px}
+  .bar-w .bar{width:100%;max-width:34px;border-radius:6px 6px 2px 2px;background:var(--gold);min-height:2px}
+  .bar-w .bar.neg{background:var(--bad)}
+  .bar-w .bar.empty{background:var(--empty);height:2px}
+  .bar-w .day{font-size:11px;color:var(--muted);margin-top:6px}
+  .legend{display:flex;gap:16px;color:var(--muted);font-size:12px;margin-top:10px;flex-wrap:wrap}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+
+  .goal{margin-bottom:14px}
+  .goal .t{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px}
+  .goal .t span:last-child{color:var(--muted)}
+  .gbar{height:8px;border-radius:999px;background:var(--empty);overflow:hidden;margin-top:6px}
+  .gbar>span{display:block;height:100%;border-radius:999px;background:var(--gold)}
+  .bh-goal{margin-bottom:14px}
+  .bh-goal .bh-muted{font-size:12px}
+  .bh-goalbar{background:var(--empty);border-radius:999px;height:10px;overflow:hidden;margin-top:6px}
+  .bh-goalbar>span{display:block;height:100%;background:var(--gold)}
+  svg.line{width:100%;height:180px}
+  .bh-goal .bh-muted{font-size:12px}
+
+  .rep-foot{color:var(--muted);font-size:12px;margin-top:28px;border-top:1px solid var(--line);padding-top:12px}
+  a.back{color:var(--muted);font-size:12px;text-decoration:none}
+  a.back:hover{color:var(--gold)}
+  .bh-muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="rep-head">
+    <div>
+      <div class="rep-title">健身周报</div>
+      <div class="rep-range" id="range">—</div>
+    </div>
+    <div class="week-nav">
+      <button onclick="shift(-1)">‹</button>
+      <span class="week-now" id="wlabel">—</span>
+      <button onclick="shift(1)">›</button>
+    </div>
+  </div>
+  <div style="margin-bottom:14px"><a class="back" href="index.html">← 返回看板</a></div>
+
+  <div class="coach" id="coach">…</div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="block">
+    <h3>体重曲线 <span class="aux" id="wnote"></span></h3>
+    <svg id="wsvg" viewBox="0 0 760 190" preserveAspectRatio="none"></svg>
+  </div>
+
+  <div class="grid2">
+    <div class="block">
+      <h3>每日热量缺口 <span class="aux">柱上数字=当日缺口 kcal</span></h3>
+      <div class="bars" id="defbars"></div>
+      <div class="legend"><span><i style="background:var(--gold)"></i>有缺口</span>
+        <span><i style="background:var(--bad)"></i>超摄入</span>
+        <span><i style="background:var(--line)"></i>未记录</span></div>
+    </div>
+    <div class="block">
+      <h3>蛋白达标 <span class="aux" id="pnote"></span></h3>
+      <div class="bars" id="probars"></div>
+      <div class="legend"><span><i style="background:var(--gold)"></i>≥100%</span>
+        <span><i style="background:var(--warn)"></i>≥80%</span>
+        <span><i style="background:var(--bad)"></i>&lt;80%</span>
+        <span><i style="background:var(--line)"></i>未记录</span></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="block">
+      <h3>宏量占比（周均）</h3>
+      <div class="macro" id="macrobar"></div>
+      <div class="legend" id="macrolegend"></div>
+      <div class="bh-muted" style="font-size:12px;margin-top:8px" id="macrosub"></div>
+    </div>
+    <div class="block">
+      <h3>目标进度</h3>
+      <div id="goals"></div>
+    </div>
+  </div>
+
+  <div class="rep-foot" id="foot"></div>
+</div>
+
+<!-- data.js 由 boot 链加载（本地或 ../_save/dashboard/） -->
+<script>
+document.getElementById('skin').addEventListener('error', function(){ this.setAttribute('href','butler.css'); });
+
+const D = window.DASHBOARD_DATA || null;
+const MON = (d)=>{ const x=new Date(d); x.setDate(x.getDate()-((x.getDay()+6)%7)); return x; };
+const iso = (d)=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const zhi = (n,d=1)=> (n===null||n===undefined)?'—':Number(n).toFixed(d).replace(/\.0$/,'');
+let WEEK_OFFSET = -1;  // 默认展示上一个完整周；0=本周
+
+function weekRange(off){
+  const now = new Date(); const base = MON(now);
+  base.setDate(base.getDate() + off*7);
+  const end = new Date(base); end.setDate(end.getDate()+6);
+  return [base, end];
+}
+function weekLabel(a){
+  const th = a[0].toISOString().match(/^(\d+)-W(\d+)$/);
+  const jan1 = new Date(a[0].getFullYear(),0,1);
+  const w = Math.ceil((((a[0]-jan1)/86400000)+jan1.getDay()+1)/7);
+  return `${a[0].getFullYear()} · W${String(w).padStart(2,'0')}`;
+}
+
+function daysOfWeek(a,b){
+  const out=[]; const c=new Date(a);
+  while(c<=b){ out.push(new Date(c)); c.setDate(c.getDate()+1); }
+  return out;
+}
+const rowFor = (dr, d)=> dr.find(r=>String(r.recorded_at).slice(0,10)===iso(d));
+
+function render(){
+  if(!D){ document.getElementById('coach').textContent='暂无数据：先运行 tools/data.py serve'; return; }
+  const cfg = D.config||{};
+  const dr = (D.tables.daily_records||[]).filter(r=>r.recorded_at);
+  const [A,B] = weekRange(WEEK_OFFSET);
+  const days = daysOfWeek(A,B).map(d=>({d, key:iso(d), row:rowFor(dr,d)}));
+  const has = days.filter(x=>x.row);
+
+  document.getElementById('range').textContent = `${iso(A)} 至 ${iso(B)} · 共 7 天`;
+  document.getElementById('wlabel').textContent = weekLabel([A]);
+
+  // —— KPI ——
+  const ws = has.filter(x=>x.row.weight_kg!==null&&x.row.weight_kg!==undefined);
+  const dw = (ws.length>=2)? (ws[ws.length-1].row.weight_kg - ws[0].row.weight_kg) : null;
+  const intake = has.filter(x=>(x.row.total_calories||0)>0);
+  const avgIn = intake.length? Math.round(intake.reduce((s,x)=>s+x.row.total_calories,0)/intake.length):null;
+  const deficits = has.filter(x=>x.row.tdee).map(x=>Math.round((x.row.tdee+(x.row.calories_burned||0)) - (x.row.total_calories||0)));
+  const avgDef = deficits.length? Math.round(deficits.reduce((s,v)=>s+v,0)/deficits.length):null;
+  const trainDays = new Set(has.filter(x=>(x.row.calories_burned||0)>0).map(x=>x.key)).size;
+  const kpis = [
+    {lb:'体重变化', num: dw===null?'—':(dw>0?'+':'')+zhi(dw,2)+' kg', gold: dw!==null&&dw<0,
+     sub: ws.length>=2? `${zhi(ws[0].row.weight_kg)} → ${zhi(ws[ws.length-1].row.weight_kg)} kg`:'本周体重记录不足'},
+    {lb:'日均摄入', num: avgIn===null?'—':avgIn+' kcal', gold:false,
+     sub: intake.length? `按 ${intake.length} 天记录平均`:'本周没有饮食记录'},
+    {lb:'日均缺口', num: avgDef===null?'—':avgDef+' kcal', gold: avgDef!==null&&avgDef>0,
+     sub: cfg.daily_deficit? `目标缺口 ${cfg.daily_deficit} kcal/工作日`:'未设缺口目标'},
+    {lb:'训练天数', num: trainDays+' 天', gold: trainDays>0, sub:`记录 ${has.length}/7 天`},
+  ];
+  document.getElementById('kpis').innerHTML = kpis.map(k=>`
+    <div class="kpi"><div class="lb">${k.lb}</div>
+    <div class="num ${k.gold?'gold':''}">${k.num}</div>
+    <div class="sub">${k.sub}</div></div>`).join('');
+
+  // —— 教练视角（确定性规则，禁编造）——
+  const parts=[];
+  if(dw!==null) parts.push(dw<0? `本周体重下降 ${zhi(-dw,2)}kg，方向正确`:
+    dw>0? `本周体重上升 ${zhi(dw,2)}kg，波动在正常范围${dw>1?'偏大':''}`:'体重与上周持平');
+  else parts.push('本周体重记录不足，无法判断趋势');
+  if(avgDef!==null&&cfg.daily_deficit) parts.push(avgDef>=cfg.daily_deficit*0.8? '缺口基本打满':'缺口还没打满，晚餐可以再收一收');
+  if(avgIn===null) parts.push('饮食一块完全没记录，下周从「说一句吃了啥」开始');
+  document.getElementById('coach').innerHTML = `<b>教练视角</b>${parts.slice(0,2).join('；')}。`;
+
+  // —— 体重曲线 ——
+  const svg=document.getElementById('wsvg'), W=760,H=190,pad=30;
+  if(ws.length>=2){
+    const vals=ws.map(x=>x.row.weight_kg);
+    let min=Math.min(...vals),max=Math.max(...vals);
+    if(max-min<1){max=min+1;}
+    const pt=x=>{const i=ws.indexOf(x);const px=pad+(W-2*pad)*i/(ws.length-1);
+      const py=H-pad-(H-2*pad)*(x.row.weight_kg-min)/(max-min);return [px,py];};
+    const pts=ws.map(pt);
+    const path=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+    svg.innerHTML =
+      `<text x="${pad}" y="16" fill="var(--muted)" font-size="11">${max}</text>`+
+      `<text x="${pad}" y="${H-8}" fill="var(--muted)" font-size="11">${min}</text>`+
+      `<path d="${path}" fill="none" stroke="var(--gold)" stroke-width="2"/>`+
+      pts.map(p=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="var(--gold)"/>`).join('');
+    document.getElementById('wnote').textContent = `${ws.length} 次记录 · ${min}–${max} kg`;
+  } else { svg.innerHTML=''; document.getElementById('wnote').textContent='记录不足，画不出曲线'; }
+
+  // —— 每日缺口柱 ——
+  const tgt = Number(cfg.daily_deficit||0);
+  const maxBar = Math.max(tgt, ...deficits, 100)*1.15 || 100;
+  document.getElementById('defbars').innerHTML = days.map(x=>{
+    const r=x.row, dname='一二三四五六日'[(x.d.getDay()+6)%7];
+    if(!r||!r.tdee) return `<div class="bar-w"><div class="bar empty"></div><div class="day">${dname}</div></div>`;
+    const v=Math.round((r.tdee+(r.calories_burned||0))-(r.total_calories||0));
+    const h=Math.max(2, Math.abs(v)/maxBar*130);
+    return `<div class="bar-w"><div class="val">${v}</div>
+      <div class="bar ${v<0?'neg':''}" style="height:${h}px"></div><div class="day">${dname}</div></div>`;
+  }).join('');
+
+  // —— 蛋白达标 ——
+  const prot = has.filter(x=>x.row.protein_target);
+  document.getElementById('pnote').textContent = prot.length? '按当日目标百分比':'—';
+  document.getElementById('probars').innerHTML = days.map(x=>{
+    const r=x.row, dname='一二三四五六日'[(x.d.getDay()+6)%7];
+    if(!r||!r.protein_target) return `<div class="bar-w"><div class="bar empty"></div><div class="day">${dname}</div></div>`;
+    const pct=Math.round((r.total_protein||0)/r.protein_target*100);
+    const col=pct>=100?'var(--good)':pct>=80?'var(--warn)':'var(--bad)';
+    const h=Math.max(2, Math.min(100,pct)/100*130);
+    return `<div class="bar-w"><div class="val">${pct}%</div>
+      <div class="bar" style="height:${h}px;background:${col}"></div><div class="day">${dname}</div></div>`;
+  }).join('');
+
+  // —— 宏量占比 ——
+  const tp=sum(has,x=>x.row.total_protein), tc=sum(has,x=>x.row.total_carbs), tf=sum(has,x=>x.row.total_fat);
+  const kp=tp*4, kc=tc*4, kf=tf*9, kt=kp+kc+kf;
+  if(kt>0){
+    const P=Math.round(kp/kt*100),C=Math.round(kc/kt*100),Fat=100-P-C;
+    document.getElementById('macrobar').innerHTML=
+      `<span style="width:${P}%;background:var(--gold)"></span>`+
+      `<span style="width:${C}%;background:var(--accent2)"></span>`+
+      `<span style="width:${Fat}%;background:var(--muted)"></span>`;
+    document.getElementById('macrolegend').innerHTML=
+      `<span><i style="background:var(--gold)"></i>蛋白 ${P}%</span>`+
+      `<span><i style="background:var(--accent2)"></i>碳水 ${C}%</span>`+
+      `<span><i style="background:var(--muted)"></i>脂肪 ${Fat}%</span>`;
+    document.getElementById('macrosub').textContent =
+      `周均 蛋白${zhi(tp/intake.length)}g · 碳水${zhi(tc/intake.length)}g · 脂肪${zhi(tf/intake.length)}g（按有记录的 ${intake.length} 天平均）`;
+  }
+
+  // —— 目标进度 ——
+  const goals=(D.tables.goals||[]).filter(g=>(g.status||'active')==='active');
+  document.getElementById('goals').innerHTML = goals.length? goals.map(g=>{
+    let pct=null;
+    if([g.start_value,g.target_value,g.current_value].every(v=>v!==undefined&&v!==null)&&g.start_value!==g.target_value)
+      pct=Math.round(Math.max(0,Math.min(1,(g.current_value-g.start_value)/(g.target_value-g.start_value)))*100);
+    return `<div class="goal"><div class="t"><span>${g.name}</span>
+      <span>${g.current_value??'—'} → ${g.target_value} ${g.unit||''} · ${pct===null?'—':pct+'%'}</span></div>
+      <div class="gbar"><span style="width:${pct||0}%"></span></div></div>`;
+  }).join('') : '<span style="color:var(--muted);font-size:13px">暂无活跃目标</span>';
+
+  document.getElementById('foot').textContent =
+    `数据黄金源：本页全部数字由本地 data\\*.jsonl 当场计算（daily_records 派生表），无任何记忆或推测 · 生成于 ${new Date().toLocaleString('zh-CN')} · AgentCrew`;
+}
+function sum(arr,f){return arr.reduce((s,x)=>s+(f(x)||0),0);}
+function shift(n){ WEEK_OFFSET+=n; render(); }
+
+/* 数据加载：先试同目录（面板经 URL 映射到存档区），失败回退 ../_save/dashboard/（lite 存档区） */
+(function boot(){
+  if (window.DASHBOARD_DATA !== undefined) { render(); return; }
+  var s = document.createElement('script');
+  s.src = '../_save/dashboard/data.js';
+  s.onload = function(){ render(); };
+  s.onerror = function(){ render(); };  // 两侧都没有 → render 显示"暂无数据"
+  document.head.appendChild(s);
+})();
+
+</script>
+</body>
+</html>
