@@ -63,6 +63,7 @@ def main() -> int:
     if os.path.isdir(agdir):
         on_disk = [d for d in sorted(os.listdir(agdir))
                    if os.path.isdir(B.p(agdir, d)) and not d.startswith(("_", "."))]
+    new_game = not os.path.isfile(B.save_manifest_path(root))
     for d in on_disk:
         adir = B.p(agdir, d)
         try:
@@ -72,8 +73,11 @@ def main() -> int:
             continue
         aid = m.get("id", d)
         if aid not in registered:
-            add(WARN, aid, "住在收编区但未登记 registry（跑 adopt.py 收编）")
-        check_agent(adir, m, args, add)
+            if new_game:
+                add(INFO, aid, "新游戏：收编后即可用（adopt.py 或面板安装页）")
+            else:
+                add(WARN, aid, "住在收编区但未登记 registry（跑 adopt.py 收编）")
+        check_agent(adir, m, args, add, new_game=new_game)
 
     # ---- 存档架构审计 ----
     # 1) 程序区散落增量数据（确定性扫描，与 save.py watch 同源）
@@ -142,7 +146,7 @@ def main() -> int:
     return 1 if any(f["level"] == ERROR for f in findings) else 0
 
 
-def check_agent(adir: str, m: dict, args, add, root: str = '.') -> None:
+def check_agent(adir: str, m: dict, args, add, root: str = '.', new_game: bool = False) -> None:
     aid = m.get("id", "?")
     errs, warns = B.validate_manifest(m, adir)
     for e in errs:
@@ -158,7 +162,10 @@ def check_agent(adir: str, m: dict, args, add, root: str = '.') -> None:
     # 数据区在存档切片（增量信息不进程序区）
     sdir = B.agent_save_dir(B.find_repo_root() or root, aid)
     if not os.path.isdir(B.p(sdir, "data")):
-        add(ERROR, aid, "存档切片缺 data/（跑 adopt.py 或 migrate_save.py）")
+        if new_game:
+            add(INFO, aid, "新游戏：首次运行时自动建档（init/adopt 均可）")
+        else:
+            add(ERROR, aid, "存档切片缺 data/（跑 adopt.py 或 migrate_save.py）")
     pend = B.inbox_tasks(adir)
     if pend:
         add(INFO, aid, f"inbox 有 {len(pend)} 张待办交办单")
