@@ -5,13 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>样板助理 · 看板</title>
 <!-- 统一皮肤：收编区内指向总管面板皮肤；lite 模式自动回退本目录拷贝 -->
+<link rel="icon" type="image/png" href="../../../docs/images/logo.png" onerror="this.removeAttribute('href')">
 <link rel="stylesheet" href="../../04-panel/skin/butler.css" id="skin">
 </head>
 <body>
 <header class="bh-header">
-  <div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <img src="../../../docs/images/logo.png" class="bh-logo" width="34" height="34" onerror="this.style.display='none'" alt="">
+    <div>
     <h1 id="agent-name">…</h1>
     <p class="bh-sub"><span id="agent-id"></span> · v<span id="agent-version"></span> · 数据更新于 <span id="generated-at"></span></p>
+    </div>
   </div>
   <span class="bh-badge">随手小本本</span>
 </header>

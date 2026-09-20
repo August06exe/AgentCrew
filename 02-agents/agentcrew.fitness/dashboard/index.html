@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>健身助理 · 看板</title>
+<link rel="icon" type="image/png" href="../../../docs/images/logo.png" onerror="this.removeAttribute('href')">
 <link rel="stylesheet" href="../../04-panel/skin/butler.css" id="skin">
 <style>
   .bh-grid { display:grid; grid-template-columns: 1fr 1fr; gap:20px; }
@@ -17,9 +18,12 @@
 </head>
 <body>
 <header class="bh-header">
-  <div>
-    <h1 id="agent-name">…</h1>
+  <div style="display:flex;align-items:center;gap:10px">
+    <img src="../../../docs/images/logo.png" class="bh-logo" width="38" height="38" onerror="this.style.display='none'" alt="">
+    <div>
+      <h1 id="agent-name">…</h1>
     <p class="bh-sub"><span id="agent-id"></span> · v<span id="agent-version"></span> · 数据更新于 <span id="generated-at"></span></p>
+    </div>
   </div>
   <span class="bh-badge">记 · 算 · 盯 · 报</span>
 </header>

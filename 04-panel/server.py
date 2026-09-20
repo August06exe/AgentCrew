@@ -168,6 +168,11 @@ class Handler(BaseHTTPRequestHandler):
         for page in ("data.html", "install.html", "onboarding.html"):
             if path == "/" + page:
                 return self._file(B.p(PANEL_DIR, page), "text/html; charset=utf-8")
+        if path.startswith("/docs/images/") and path.endswith(".png"):
+            target = os.path.abspath(B.p(ROOT, *path.lstrip("/").split("/")))
+            if os.path.isfile(target):
+                return self._file(target, "image/png")
+            return self._send(404, "not found".encode(), "text/plain; charset=utf-8")
         if path == "/panel-lib.js":
             return self._file(B.p(PANEL_DIR, "panel-lib.js"), "text/javascript; charset=utf-8")
         if path.endswith("butler.css") and "skin" in path:  # 总管皮肤（含助理看板相对路径的兜底）
