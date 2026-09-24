@@ -86,7 +86,23 @@ def main() -> int:
                 init_out = {"ok": False, "error": (r_init.stderr or r_init.stdout)[:200]}
         checklist["s6_tables_init"] = bool(init_out and init_out.get("ok"))
         declared_tables = [t.get("name") for t in m.get("tables") or []]
-        checklist["s6_tables_exist"] = all(os.path.isfile(B.p(src, "data", f"{t}.jsonl")) for t in declared_tables)
+        # s6 表文件落点（PARADIGM §5 存档架构）：tables 一律经 tools/data.py 的存档解析器
+        # 落在存档切片（托管=实例 _save/agents/<id>/data；lite=<src>/_save/data）；
+        # 程序区 data\ 出现表文件反而是违规增量（save.py watch 会拦）。故本检查的落点
+        # 与 data.py 的解析规则逐条对齐：沙箱env > 托管 > lite（不认 AGENTCREW_SAVE，
+        # 因为助理侧工具不读它，对齐对象是 init 实际写入处）。
+        env_data_dir = os.environ.get("ASSISTANT_DATA_DIR")
+        if env_data_dir:
+            tables_dir = os.path.abspath(env_data_dir)
+        else:
+            mode = B.detect_mode(src)
+            if mode["mode"] == "managed":
+                tables_dir = B.p(mode["master_root"], B.SAVE_DIRNAME, "agents",
+                                 os.path.basename(os.path.abspath(src)), "data")
+            else:
+                tables_dir = B.p(B.agent_save_dir_lite(src), "data")
+        checklist["s6_tables_exist"] = all(
+            os.path.isfile(B.p(tables_dir, f"{t}.jsonl")) for t in declared_tables)
         # first_run：收编时执行一次的初始化命令（如导入种子库；幂等命令为宜）
         first_run_results = {}
         for cmd in m.get("first_run") or []:

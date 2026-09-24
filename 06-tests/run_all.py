@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""run_all.py — 一键回归：体检 + 模板冒烟 + 样板冒烟 + 健身全流程 + 联邦模拟器。"""
+"""run_all.py — 一键回归：体检 + 模板冒烟 + 样板冒烟 + 健身全流程 + 理财冒烟/全流程 + 联邦模拟器。"""
 import subprocess
 import sys
 import os
@@ -13,6 +13,8 @@ SUITES = [
     ("template冒烟", [PY, os.path.join(ROOT, "03-template", "tests", "smoke.py")]),
     ("sample冒烟", [PY, os.path.join(ROOT, "02-agents", "demo.sample", "tests", "smoke.py")]),
     ("fitness全流程", [PY, os.path.join(ROOT, "02-agents", "agentcrew.fitness", "tests", "test_flow.py")]),
+    ("finance冒烟", [PY, os.path.join(ROOT, "02-agents", "agentcrew.finance", "tests", "smoke.py")]),
+    ("finance全流程", [PY, os.path.join(ROOT, "02-agents", "agentcrew.finance", "tests", "test_flow.py")]),
     ("联邦模拟器", [PY, os.path.join(HERE, "simulator.py")]),
 ]
 

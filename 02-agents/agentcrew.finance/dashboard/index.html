@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>理财顾问 · 看板</title>
+<link rel="icon" type="image/png" href="../../../docs/images/logo.png" onerror="this.removeAttribute('href')">
+<!-- 统一皮肤：收编区命中总管皮肤；lite 模式 404 后回退本目录拷贝（data-fallback 防循环） -->
+<link rel="stylesheet" href="../../04-panel/skin/butler.css" id="skin"
+      onerror="if(this.getAttribute('data-fallback')!=='1'){this.setAttribute('data-fallback','1');this.setAttribute('href','butler.css');}">
+<style>
+  /* 家族设计系统：02-agents/agentcrew.fitness/dashboard/DESIGN.md v2（warm-editorial 浅色） */
+  .bh-grid { display:grid; grid-template-columns: 1fr 1fr; gap:20px; }
+  @media (max-width: 800px){ .bh-grid { grid-template-columns: 1fr; } }
+  svg.chart { width:100%; height:auto; display:block; }
+  .bh-legend { display:flex; gap:16px; color:var(--bh-muted); font-size:12px; margin-top:8px; flex-wrap:wrap; }
+  .bh-legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .bh-num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+</style>
+</head>
+<body>
+<header class="bh-header">
+  <div style="display:flex;align-items:center;gap:10px">
+    <img src="../../../docs/images/logo.png" class="bh-logo" width="38" height="38" onerror="this.style.display='none'" alt="">
+    <div>
+      <h1 id="agent-name">…</h1>
+      <p class="bh-sub"><span id="agent-id"></span> · v<span id="agent-version"></span> · 数据更新于 <span id="generated-at"></span></p>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span class="bh-badge">记 · 对 · 盯 · 报</span>
+    <a class="bh-badge" href="monthly.html">月度简报 →</a>
+  </div>
+</header>
+
+<main class="bh-main">
+  <section class="bh-panel" style="border-left:3px solid var(--bh-accent)">
+    <h2 style="margin:0 0 6px;color:var(--bh-accent)">月度理财简报</h2>
+    <p style="margin:0;font-size:13px">收支分类 / 预算执行 / Top 开销 / 客观提示，支持 ‹ › 切换月份：<a href="monthly.html">打开月报 →</a>（本页只呈现本地账目客观信息，不构成投资建议）</p>
+  </section>
+
+  <section class="bh-cards" id="cards" style="margin-top:16px"></section>
+
+  <div class="bh-grid" style="margin-top:20px;">
+    <section class="bh-panel">
+      <h2>近 6 个月现金流</h2>
+      <svg class="chart" id="cashflow-svg" viewBox="0 0 600 220" role="img" aria-label="近 6 个月现金流柱状图"></svg>
+      <div class="bh-legend"><span><i style="background:var(--bh-accent-2)"></i>收入</span>
+        <span><i style="background:var(--bh-accent)"></i>支出</span></div>
+      <p class="bh-muted" id="cashflow-note" style="margin-bottom:0"></p>
+    </section>
+    <section class="bh-panel">
+      <h2>投资市值曲线</h2>
+      <svg class="chart" id="valuation-svg" viewBox="0 0 600 220" role="img" aria-label="投资市值折线图"></svg>
+      <p class="bh-muted" id="valuation-note" style="margin-bottom:0"></p>
+    </section>
+  </div>
+
+  <section class="bh-panel" style="margin-top:20px;">
+    <h2>流水明细（最近 20 笔）</h2>
+    <table class="bh-table"><thead id="txns-head"></thead><tbody id="txns-body"></tbody></table>
+  </section>
+
+  <div class="bh-grid" style="margin-top:20px;">
+    <section class="bh-panel">
+      <h2>资产与负债</h2>
+      <table class="bh-table"><thead id="bs-head"></thead><tbody id="bs-body"></tbody></table>
+      <p class="bh-muted" id="bs-note" style="margin-bottom:0"></p>
+    </section>
+    <section class="bh-panel">
+      <h2>说明</h2>
+      <p class="bh-muted" style="font-size:13px">数据全部本地（存档区 *.jsonl，人可直接打开看）。余额与净资产永不定存死数，
+      由 txns 流水按复式记账当场推导（tools/ledger.py，试算恒平随时可核）。投资市值只记主人亲口报的估值快照。
+      本页取数：<code>tools/data.py serve</code> 重建 dashboard/data.js；零联网零构建；收编状态下总管面板自动收录。
+      本页只呈现客观信息，不构成任何投资建议。</p>
+    </section>
+  </div>
+</main>
+
+<script id="app">
+function render(){
+  var $ = function(id){ return document.getElementById(id); };
+  var D = window.DASHBOARD_DATA;   // 取数放执行时：boot 链异步加载 data.js 后仍能拿到
+  if (!D || !D.agent) { $('agent-name').textContent = '暂无数据：运行 tools/data.py serve 重建 dashboard/data.js'; return; }
+  $('agent-name').textContent = D.agent.name;
+  $('agent-id').textContent = D.agent.id;
+  $('agent-version').textContent = D.agent.version;
+  $('generated-at').textContent = String(D.generated_at || '').replace('T', ' ').slice(0, 16);
+
+  function yuan(n){
+    if (n === null || n === undefined || isNaN(Number(n))) return '—';
+    return Number(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function esc(s){
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  var T = D.tables || {};
+  var fin = D.finance || {};
+  var unavailable = !!fin._unavailable;
+  var tmap = {};
+  (T.accounts || []).forEach(function(a){ tmap[a.name] = a.type; });
+  var TYPE_ZH = { asset: '资产', liability: '负债', income: '收入', expense: '支出', equity: '权益' };
+
+  // —— 卡片：净资产（资产 − 负债，资产含投资市值）+ 本月收支 ——
+  var nw = fin.net_worth || { assets: [], liabilities: [], assets_total: 0, liabilities_total: 0, net_worth: null };
+  var tm = fin.this_month || { month: '', income: null, expense: null, net: null };
+  var inv = (nw.assets || []).filter(function(a){ return a.value_source === 'valuation'; });
+  var invSum = inv.reduce(function(s, a){ return s + (Number(a.value) || 0); }, 0);
+  var cards = [
+    { label: '净资产（元）', num: yuan(nw.net_worth),
+      sub: '资产 ' + yuan(nw.assets_total) + ' − 负债 ' + yuan(nw.liabilities_total)
+         + (inv.length ? ' · 含投资市值 ' + yuan(invSum) : '') },
+    { label: '本月收入（元）', num: yuan(tm.income), sub: tm.month || '' },
+    { label: '本月支出（元）', num: yuan(tm.expense), sub: tm.month || '' },
+    { label: '本月结余（元）', num: yuan(tm.net), sub: '收入 − 支出' }
+  ];
+  $('cards').innerHTML = cards.map(function(c){
+    return '<div class="bh-card"><div class="bh-card-num">' + esc(c.num) + '</div>'
+         + '<div class="bh-card-label">' + esc(c.label) + '</div>'
+         + '<div class="bh-card-label" style="font-size:11px">' + esc(c.sub) + '</div></div>';
+  }).join('');
+
+  // —— 近 6 个月现金流（纯 SVG 柱状，收入=森林绿 / 支出=赤陶土）——
+  var cf = fin.cashflow_6m || [];
+  var svg = $('cashflow-svg'), note = $('cashflow-note');
+  var W = 600, H = 220, padT = 20, padB = 26;
+  var maxV = 1;
+  cf.forEach(function(m){ maxV = Math.max(maxV, Number(m.income) || 0, Number(m.expense) || 0); });
+  var allZero = cf.every(function(m){ return !(Number(m.income) || 0) && !(Number(m.expense) || 0); });
+  var parts = [];
+  if (!cf.length || unavailable) {
+    note.textContent = unavailable ? '财计算段不可用：' + (fin._unavailable || '') : '暂无现金流数据';
+  } else {
+    var gw = (W - 8) / cf.length, bw = Math.min(34, gw * 0.3);
+    parts.push('<line x1="4" y1="' + (H - padB) + '" x2="' + (W - 4) + '" y2="' + (H - padB)
+             + '" stroke="var(--bh-line)" stroke-width="1"/>');
+    parts.push('<text x="6" y="14" fill="var(--bh-muted)" font-size="11">刻度顶 ' + yuan(maxV) + '</text>');
+    cf.forEach(function(m, i){
+      var x0 = 4 + i * gw;
+      [['income', 'var(--bh-accent-2)'], ['expense', 'var(--bh-accent)']].forEach(function(pair){
+        var v = Number(m[pair[0]]) || 0;
+        var h = (H - padT - padB) * v / maxV;
+        var x = x0 + (pair[0] === 'income' ? gw * 0.5 - bw - 2 : gw * 0.5 + 2);
+        parts.push('<rect x="' + x.toFixed(1) + '" y="' + (H - padB - h).toFixed(1)
+                 + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, h).toFixed(1)
+                 + '" rx="3" fill="' + pair[1] + '"/>');
+      });
+      parts.push('<text x="' + (x0 + gw / 2).toFixed(1) + '" y="' + (H - 8)
+               + '" text-anchor="middle" fill="var(--bh-muted)" font-size="11">'
+               + parseInt(String(m.month).slice(5), 10) + '月</text>');
+    });
+    var ti = cf.reduce(function(s, m){ return s + (Number(m.income) || 0); }, 0);
+    var te = cf.reduce(function(s, m){ return s + (Number(m.expense) || 0); }, 0);
+    note.textContent = allZero ? '近 6 个月暂无收支流水，记第一笔就开始画'
+      : '近 6 个月 · 收入合计 ' + yuan(ti) + ' 元 · 支出合计 ' + yuan(te) + ' 元';
+  }
+  svg.innerHTML = parts.join('');
+
+  // —— 投资市值曲线（valuations 有数据才画；同日多账户取各账户最新一报求和）——
+  var vs = $('valuation-svg'), vnote = $('valuation-note');
+  var byDate = {};
+  (T.valuations || []).forEach(function(v){
+    var d = String(v.date || ''), a = v.account;
+    if (!d) return;
+    byDate[d] = byDate[d] || {};
+    var key = String(v.created_at || '');
+    if (!byDate[d][a] || key > String(byDate[d][a].created_at || '')) byDate[d][a] = v;
+  });
+  var series = Object.keys(byDate).sort().map(function(d){
+    var total = 0, accs = 0;
+    Object.keys(byDate[d]).forEach(function(a){ total += Number(byDate[d][a].value) || 0; accs++; });
+    return { date: d, total: total, accs: accs };
+  });
+  if (series.length >= 2) {
+    var p = [], Wv = 600, Hv = 220, pad = 34;
+    var vals = series.map(function(s){ return s.total; });
+    var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+    if (max - min < 0.01) max = min + 1;
+    var pts = series.map(function(s, i){
+      var x = pad + (Wv - 2 * pad) * i / (series.length - 1);
+      var y = Hv - pad - (Hv - 2 * pad) * (s.total - min) / (max - min);
+      return [x, y];
+    });
+    var path = pts.map(function(pt, i){ return (i ? 'L' : 'M') + pt[0].toFixed(1) + ',' + pt[1].toFixed(1); }).join(' ');
+    p.push('<text x="' + pad + '" y="16" fill="var(--bh-muted)" font-size="11">' + yuan(max) + '</text>');
+    p.push('<text x="' + pad + '" y="' + (Hv - 8) + '" fill="var(--bh-muted)" font-size="11">' + yuan(min) + '</text>');
+    p.push('<path d="' + path + '" fill="none" stroke="var(--bh-accent)" stroke-width="2"/>');
+    pts.forEach(function(pt){ p.push('<circle cx="' + pt[0].toFixed(1) + '" cy="' + pt[1].toFixed(1)
+      + '" r="3.5" fill="var(--bh-accent)"/>'); });
+    var last = series[series.length - 1];
+    vnote.textContent = series.length + ' 个估值日 · ' + last.accs + ' 个账户 · 最新合计 ' + yuan(last.total)
+      + ' 元（' + last.date + '）';
+    vs.innerHTML = p.join('');
+  } else {
+    vs.innerHTML = '';
+    vnote.textContent = (T.valuations || []).length === 1
+      ? '只有 1 次估值，再报一次才能连成曲线'
+      : '暂无估值快照：投资跟踪未开启，或还没报过市值';
+  }
+
+  // —— 流水明细表（日期 / from → to / 金额 / 备注）——
+  var recent = (fin.recent_txns && fin.recent_txns.length ? fin.recent_txns
+    : (T.txns || []).slice().sort(function(a, b){
+        return String(b.date + ' ' + (b.created_at || '')).localeCompare(String(a.date + ' ' + (a.created_at || '')));
+      }).slice(0, 20));
+  $('txns-head').innerHTML =
+    '<tr><th>日期</th><th>from → to</th><th class="bh-num">金额（元）</th><th>备注</th></tr>';
+  $('txns-body').innerHTML = recent.length ? recent.map(function(t){
+    var isIn = tmap[t.from_account] === 'income';
+    return '<tr><td>' + esc(t.date) + '</td>'
+      + '<td>' + esc(t.from_account) + ' → ' + esc(t.to_account) + '</td>'
+      + '<td class="bh-num' + (isIn ? ' bh-good' : '') + '">' + esc(yuan(t.amount)) + '</td>'
+      + '<td>' + (t.note ? esc(t.note) : '<span class="bh-muted">—</span>') + '</td></tr>';
+  }).join('') : '<tr><td colspan="4" class="bh-muted">还没有流水，跟助理说一句「午饭花了 32，微信」就能开始记。</td></tr>';
+
+  // —— 资产与负债表 ——
+  var bsn = $('bs-note');
+  if (unavailable) {
+    $('bs-body').innerHTML = '';
+    bsn.textContent = '财计算段不可用：' + (fin._unavailable || '');
+  } else {
+    var rows = [];
+    (nw.assets || []).forEach(function(a){
+      rows.push('<tr><td>' + esc(a.name) + '</td><td>' + TYPE_ZH[a.type] + (a.value_source === 'valuation' ? ' · 估值' : '')
+        + '</td><td class="bh-num">' + esc(yuan(a.value_source === 'valuation' ? a.value : a.balance))
+        + '</td><td>' + (a.in_net_worth ? '✓' : '<span class="bh-muted">—</span>') + '</td></tr>');
+    });
+    (nw.liabilities || []).forEach(function(l){
+      rows.push('<tr><td>' + esc(l.name) + '</td><td>' + TYPE_ZH[l.type]
+        + '</td><td class="bh-num">' + esc(yuan(l.balance))
+        + '</td><td>' + (l.in_net_worth ? '✓' : '<span class="bh-muted">—</span>') + '</td></tr>');
+    });
+    $('bs-head').innerHTML =
+      '<tr><th>账户</th><th>类别</th><th class="bh-num">余额（元）</th><th>计净资产</th></tr>';
+    $('bs-body').innerHTML = rows.length ? rows.join('')
+      : '<tr><td colspan="4" class="bh-muted">还没有账户，收编引导或跟助理说「开户」。</td></tr>';
+    bsn.textContent = rows.length
+      ? '资产合计 ' + yuan(nw.assets_total) + ' · 负债合计 ' + yuan(nw.liabilities_total)
+        + ' · 净资产 ' + yuan(nw.net_worth) + '（截至 ' + (fin.as_of || '') + '）'
+      : '';
+  }
+}
+</script>
+
+<!-- 数据加载 boot 链：面板注入 → 同目录（面板 URL 映射存档区）→ lite 存档区 → 收编区存档区 -->
+<script>
+(function boot(){
+  if (window.DASHBOARD_DATA !== undefined) { render(); return; }
+  var candidates = [
+    'data.js',
+    '../_save/dashboard/data.js',
+    '../../../_save/agents/agentcrew.finance/dashboard/data.js'
+  ];
+  var i = 0;
+  (function next(){
+    if (i >= candidates.length) { render(); return; }   // 两侧都没有 → render 显示"暂无数据"
+    var s = document.createElement('script');
+    s.src = candidates[i++];
+    s.onload = function(){ render(); };
+    s.onerror = function(){ next(); };
+    document.head.appendChild(s);
+  })();
+})();
+</script>
+</body>
+</html>

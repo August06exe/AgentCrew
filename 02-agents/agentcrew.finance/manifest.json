@@ -1,0 +1,357 @@
+{
+  "protocol": "agentcrew.protocol/v1",
+  "paradigm": "agentcrew.paradigm/v1",
+  "id": "agentcrew.finance",
+  "name": "理财顾问",
+  "version": "1.0.0",
+  "description": "主人的账房兼财务参谋：人话记账（复式底层、从哪来到哪去）、余额与净资产全景、预算与月度理财简报、账单 CSV 导入、理财概念答疑；只算账、只摆事实，不替主人做决定。",
+  "author": "agentcrew",
+  "license": "MIT",
+  "domain": [
+    "收支/转账/还款记账（复式账本，主人只说从哪来到哪去）",
+    "账户与资产负债全景（余额、净资产、负债率）",
+    "余额断言对账与试算平衡",
+    "月度预算与超支盯梢",
+    "月度理财简报（收支分类/预算执行/净资产变动/Top开销/异常检测）",
+    "微信与支付宝账单 CSV 导入（幂等去重、信用卡还款双花对消）",
+    "投资账户市值手动跟踪（主人开启才启用，市值只记主人报的数）",
+    "理财概念答疑（本地知识库）",
+    "把金融决策算清楚（方案数字对比、费率、复利差异）",
+    "晚间记账检查、每周市值更新、每月理财简报三项提醒"
+  ],
+  "boundaries": [
+    "指令性投资建议（不说买哪只、卖哪只、何时买卖）",
+    "税务申报与税务筹划",
+    "自动交易、代客下单等任何资金操作",
+    "联网抓取行情、汇率、基金净值等实时数据",
+    "借贷纠纷等法律意见",
+    "非财务事务（健康、健身、日程等，归各家助理）"
+  ],
+  "routing_examples": {
+    "positive": [
+      "午饭花了32，微信付的",
+      "工资到账15000",
+      "信用卡还款2000",
+      "这个月吃饭花了多少？",
+      "我现在净资产多少？",
+      "最大回撤是什么意思？"
+    ],
+    "negative": [
+      "今天走了8000步，帮我记一下",
+      "帮我决定买哪只基金，直接说代码",
+      "现在茅台股价多少，帮我盯一下",
+      "帮我填一下今年的个税申报"
+    ]
+  },
+  "capabilities": [
+    "record",
+    "query",
+    "report",
+    "remind"
+  ],
+  "tables": [
+    {
+      "name": "accounts",
+      "description": "账户与会计科目同表管理：asset/liability 是真账户，income/expense 是收支科目（如 支出·餐饮），equity 是期初权益。余额永不定存死数，全部由 txns 流水推导。",
+      "columns": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "账户或科目名，如 微信零钱 / 支出·餐饮 / 期初权益"
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "asset",
+            "liability",
+            "income",
+            "expense",
+            "equity"
+          ],
+          "description": "资产 / 负债 / 收入科目 / 支出科目 / 权益"
+        },
+        {
+          "name": "in_net_worth",
+          "type": "boolean",
+          "required": true,
+          "description": "是否计入净资产计算（收支科目与权益一律 false；负债是否计入由主人定）"
+        },
+        {
+          "name": "note",
+          "type": "string",
+          "required": false,
+          "description": "备注，如 开户行、卡号后四位"
+        }
+      ]
+    },
+    {
+      "name": "txns",
+      "description": "流水，一笔交易一行：from 账户 → to 账户，金额恒为正。公共字段 recorded_at 为落库时间，date 为业务日期（钱哪天动的）。",
+      "columns": [
+        {
+          "name": "date",
+          "type": "date",
+          "required": true,
+          "description": "业务日期 YYYY-MM-DD，主人说\"昨天\"就记昨天"
+        },
+        {
+          "name": "from_account",
+          "type": "string",
+          "required": true,
+          "description": "流出账户，须已存在于 accounts"
+        },
+        {
+          "name": "to_account",
+          "type": "string",
+          "required": true,
+          "description": "流入账户，须已存在于 accounts"
+        },
+        {
+          "name": "amount",
+          "type": "number",
+          "required": true,
+          "unit": "元",
+          "description": "金额，必须为正；方向只由 from/to 表达"
+        },
+        {
+          "name": "note",
+          "type": "string",
+          "required": false,
+          "description": "备注（对方/事项）"
+        },
+        {
+          "name": "raw_text",
+          "type": "string",
+          "required": false,
+          "description": "主人原话"
+        },
+        {
+          "name": "source",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "record",
+            "import"
+          ],
+          "description": "record=对话手记，import=账单导入"
+        },
+        {
+          "name": "dedup_key",
+          "type": "string",
+          "required": false,
+          "description": "导入去重键（来源+流水号），同键视为重复导入跳过"
+        }
+      ]
+    },
+    {
+      "name": "budgets",
+      "description": "月度预算，每月每类别一行",
+      "columns": [
+        {
+          "name": "month",
+          "type": "string",
+          "required": true,
+          "description": "月份，格式 YYYY-MM"
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "支出科目名，如 支出·餐饮"
+        },
+        {
+          "name": "amount",
+          "type": "number",
+          "required": true,
+          "unit": "元",
+          "description": "当月额度"
+        }
+      ]
+    },
+    {
+      "name": "valuations",
+      "description": "投资账户手动估值快照：主人报一次记一行，市值曲线与净资产中的投资部分由此推导",
+      "columns": [
+        {
+          "name": "account",
+          "type": "string",
+          "required": true,
+          "description": "投资账户名，须已存在于 accounts"
+        },
+        {
+          "name": "date",
+          "type": "date",
+          "required": true,
+          "description": "估值日期 YYYY-MM-DD"
+        },
+        {
+          "name": "value",
+          "type": "number",
+          "required": true,
+          "unit": "元",
+          "description": "主人亲口报的市值"
+        },
+        {
+          "name": "note",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "rules",
+      "description": "主人自建记账规则：原话含关键词时默认记到目标账户/类别，主人确认后可固化为规则",
+      "columns": [
+        {
+          "name": "keyword",
+          "type": "string",
+          "required": true,
+          "description": "关键词，如 地铁"
+        },
+        {
+          "name": "target_account",
+          "type": "string",
+          "required": false,
+          "description": "默认付款账户（与 target_category 至少其一）"
+        },
+        {
+          "name": "target_category",
+          "type": "string",
+          "required": false,
+          "description": "默认支出/收入科目"
+        },
+        {
+          "name": "priority",
+          "type": "integer",
+          "required": false,
+          "description": "多条规则命中时小者优先，缺省按 100"
+        }
+      ]
+    },
+    {
+      "name": "cancel_log",
+      "description": "双花对消痕迹（append-only）：被账单行对消掉的经济事件一行，凭 dedup_key 保证换旗重导（带不带 --match-existing）都幂等；已落库行不留此表，其幂等由 txns.dedup_key 负责",
+      "columns": [
+        {
+          "name": "dedup_key",
+          "type": "string",
+          "required": true,
+          "description": "账单行去重键（与 txns.dedup_key 同一约定），同键的账单行此后一律跳过"
+        },
+        {
+          "name": "source_file",
+          "type": "string",
+          "required": true,
+          "description": "账单文件名"
+        },
+        {
+          "name": "bill_date",
+          "type": "date",
+          "required": true,
+          "description": "账单行业务日期 YYYY-MM-DD"
+        },
+        {
+          "name": "amount",
+          "type": "number",
+          "required": true,
+          "unit": "元",
+          "description": "账单行金额"
+        },
+        {
+          "name": "matched_type",
+          "type": "string",
+          "required": false,
+          "enum": [
+            "ledger",
+            "pending"
+          ],
+          "description": "对消命中来源：ledger=账本既有流水；pending=同批先前文件的待确认行"
+        },
+        {
+          "name": "matched_ref",
+          "type": "string",
+          "required": false,
+          "description": "命中痕迹：ledger 存流水 _id；pending 存 文件名:行号"
+        },
+        {
+          "name": "counterparty",
+          "type": "string",
+          "required": false,
+          "description": "交易对方"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    "tools/data.py",
+    "tools/ledger.py",
+    "tools/budget.py",
+    "tools/report.py",
+    "tools/kb.py",
+    "tools/import_bills.py"
+  ],
+  "reminders": [
+    {
+      "name": "晚间记账检查",
+      "rule": "每天晚上检查今天记没记账：一笔都没记就提醒一句；记了就顺带报一句今日净支出，并点出本月额度最紧的一类预算",
+      "default_time": "21:00",
+      "message": "今天的账记了吗？没记回我一句就好；记了我顺带报个数～",
+      "when_data_missing": [
+        "txns"
+      ],
+      "priority": 1
+    },
+    {
+      "name": "每周市值更新",
+      "rule": "每周日晚上提醒主人报一次各投资账户的市值，报了就记估值快照；仅当主人在初始化时明确启用了投资跟踪才注册本提醒，没启用就完全不要注册、不要提及",
+      "default_time": "20:30",
+      "message": "周日啦，各投资账户现在市值多少？报我一声记个快照，净资产图才准～",
+      "priority": 2
+    },
+    {
+      "name": "月度理财简报",
+      "rule": "每月 1 日早上生成上月理财简报（收支分类、预算执行、净资产变动、Top 开销与异常检测），更新看板，并给主人一句话摘要",
+      "default_time": "08:30",
+      "message": "早安，上月理财简报做好了，想听我就念给您～",
+      "priority": 2
+    }
+  ],
+  "dashboard": {
+    "main": "dashboard/index.html",
+    "up": true,
+    "data_endpoint": "tools/data.py serve"
+  },
+  "permissions": {
+    "net": false,
+    "write_outside_data": false
+  },
+  "onboarding": [
+    {
+      "q": "记账用哪档？答「精细」（分账户、每笔亮默认）或「随手」（只有一个\"钱包\"，不问账户）——请用这两个词之一回答",
+      "slot": "record_mode"
+    },
+    {
+      "q": "要开哪些账户？预设：现金、微信、支付宝、储蓄卡、信用卡、花呗，可任意增删自定义（随手档跳过此问）",
+      "slot": "accounts"
+    },
+    {
+      "q": "各账户期初余额分别是多少？（可跳过，以后随时补记期初权益）",
+      "slot": "opening_balances"
+    },
+    {
+      "q": "要开启投资跟踪吗？开启的话请报现有投资与大概现值；不开启今后就完全不问市值",
+      "slot": "investment_tracking"
+    },
+    {
+      "q": "每月想给哪些类别设预算？各多少？（可跳过）",
+      "slot": "budgets"
+    },
+    {
+      "q": "最后念一遍免责声明（全文见章程）：主人已知悉后正式上岗，以后说\"看免责声明\"可随时重看",
+      "slot": "disclaimer_ack"
+    }
+  ]
+}

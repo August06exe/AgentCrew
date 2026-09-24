@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>理财顾问 · 月度理财简报</title>
+<!-- 统一皮肤：收编区命中总管皮肤；lite 模式 404 后回退本目录拷贝（data-fallback 防循环） -->
+<link rel="stylesheet" href="../../04-panel/skin/butler.css" id="skin"
+      onerror="if(this.getAttribute('data-fallback')!=='1'){this.setAttribute('data-fallback','1');this.setAttribute('href','butler.css');}">
+<style>
+  /* ======== 遵循 dashboard 家族设计系统（02-agents/agentcrew.fitness/dashboard/DESIGN.md v2，warm-editorial 浅色版）======== */
+  :root{
+    --paper:#FAF7F2; --card:#FFFFFF; --ink:#1C1A17; --muted:#8A817A;
+    --line:rgba(28,26,23,.12); --empty:#EAE4DB;
+    --gold:#C0512F;            /* 赤陶土主强调（沿用家族变量名） */
+    --accent2:#2F5B4F;         /* 森林绿 */
+    --good:#2F5B4F; --warn:#B08968; --bad:#A63D2F;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    line-height:1.6;font-variant-numeric:tabular-nums}
+  .page{max-width:860px;margin:0 auto;padding:32px 20px 56px}
+
+  .rep-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px}
+  .rep-title{font-family:Georgia,"Times New Roman","Songti SC",serif;
+    font-size:30px;font-weight:700;letter-spacing:-.01em}
+  .rep-range{color:var(--muted);font-size:13px;margin-top:2px}
+  .month-nav{display:flex;gap:8px;align-items:center}
+  .month-nav button{background:var(--card);border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:4px 12px;cursor:pointer;font-size:14px}
+  .month-nav button:hover{border-color:var(--gold);color:var(--gold)}
+  .month-now{color:var(--gold);font-size:15px;font-weight:600;min-width:76px;text-align:center;
+    font-family:Georgia,serif}
+
+  .coach{background:var(--card);border:1px solid rgba(47,91,79,.08);border-left:3px solid var(--gold);
+    border-radius:12px;padding:14px 18px;margin:18px 0;font-size:14px}
+  .coach b{color:var(--accent2);font-weight:600;margin-right:8px}
+
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:18px 0}
+  @media(max-width:720px){
+    .kpis{grid-template-columns:repeat(2,1fr);gap:10px}
+    .kpi{padding:12px 14px}
+    .kpi .num{font-size:22px;white-space:nowrap}
+    .rep-title{font-size:24px}
+  }
+  .kpi{background:var(--card);border:1px solid rgba(47,91,79,.08);
+    border-radius:12px;padding:16px 18px}
+  .kpi .lb{color:var(--muted);font-size:12px}
+  .kpi .num{font-family:Georgia,"Times New Roman","Songti SC",serif;
+    font-size:26px;font-weight:700;margin:2px 0}
+  .kpi .num.gold{color:var(--gold)}
+  .kpi .num.bad{color:var(--bad)}
+  .kpi .sub{color:var(--muted);font-size:12px}
+
+  .block{background:var(--card);border:1px solid rgba(47,91,79,.08);
+    border-radius:12px;padding:18px 20px;margin-top:16px}
+  .block h3{margin:0 0 12px;font-size:14px;color:var(--accent2);font-weight:600;
+    display:flex;justify-content:space-between;align-items:baseline}
+  .block h3 .aux{font-size:12px;color:var(--muted);font-weight:400}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+
+  .hrow{margin-bottom:12px}
+  .hrow:last-child{margin-bottom:0}
+  .hrow .t{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px}
+  .hrow .t span:last-child{font-variant-numeric:tabular-nums}
+  .hbar{height:8px;border-radius:999px;background:var(--empty);overflow:hidden}
+  .hbar>span{display:block;height:100%;border-radius:999px;background:var(--gold)}
+  .hbar.green>span{background:var(--accent2)}
+
+  .goal{margin-bottom:14px}
+  .goal:last-child{margin-bottom:0}
+  .goal .t{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px}
+  .goal .t span:last-child{color:var(--muted)}
+  .gbar{height:8px;border-radius:999px;background:var(--empty);overflow:hidden;margin-top:6px}
+  .gbar>span{display:block;height:100%;border-radius:999px;background:var(--gold)}
+
+  .mtable{width:100%;border-collapse:collapse;font-size:13px}
+  .mtable th{text-align:left;color:var(--muted);font-weight:600;padding:6px 8px;
+    border-bottom:1px solid var(--line);white-space:nowrap}
+  .mtable td{padding:6px 8px;border-bottom:1px solid rgba(28,26,23,.06)}
+  .mtable tr:last-child td{border-bottom:none}
+  .mtable .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  .rep-foot{color:var(--muted);font-size:12px;margin-top:28px;border-top:1px solid var(--line);padding-top:12px}
+  a.back{color:var(--muted);font-size:12px;text-decoration:none}
+  a.back:hover{color:var(--gold)}
+  .bh-muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="rep-head">
+    <div>
+      <div class="rep-title">月度理财简报</div>
+      <div class="rep-range" id="range">—</div>
+    </div>
+    <div class="month-nav">
+      <button onclick="shift(-1)">‹</button>
+      <span class="month-now" id="mlabel">—</span>
+      <button onclick="shift(1)">›</button>
+    </div>
+  </div>
+  <div style="margin-bottom:14px"><a class="back" href="index.html">← 返回看板</a></div>
+
+  <div class="coach" id="coach">…</div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid2">
+    <div class="block">
+      <h3>支出类别 <span class="aux" id="expaux"></span></h3>
+      <div id="expbars"></div>
+    </div>
+    <div class="block">
+      <h3>收入类别 <span class="aux" id="incaux"></span></h3>
+      <div id="incbars"></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="block">
+      <h3>预算执行 <span class="aux">按月度额度</span></h3>
+      <div id="budgets"></div>
+    </div>
+    <div class="block">
+      <h3>Top 开销 <span class="aux" id="topaux"></span></h3>
+      <table class="mtable"><thead id="top-head"></thead><tbody id="top-body"></tbody></table>
+    </div>
+  </div>
+
+  <div class="rep-foot" id="foot"></div>
+</div>
+
+<script id="app">
+const MON = (n)=>String(n).padStart(2,'0');
+function mkShift(base, delta){
+  const parts = String(base).split('-').map(Number);
+  const d = new Date(parts[0], parts[1] - 1 + delta, 1);
+  return d.getFullYear() + '-' + MON(d.getMonth() + 1);
+}
+function monthKey(off){ const now = new Date(); return mkShift(now.getFullYear() + '-' + MON(now.getMonth() + 1), off); }
+function daysInMonth(mk){ const p = mk.split('-').map(Number); return new Date(p[0], p[1], 0).getDate(); }
+let OFFSET = -1;  // 默认展示上一个完整月；0=本月
+
+const yuan = (n)=>(n===null||n===undefined||isNaN(Number(n)))?'—'
+  :Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc = (s)=>String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const $ = (id)=>document.getElementById(id);
+
+function aggMonth(D, accs, mk){
+  // 净额口径：流入 +amt / 流出 −amt，冲正退款自然抵减原单——与 tools/ledger.py
+  // month_net_agg、budget.month_net_by_account、report.expense_by_category 同一真相，
+  // 看板不得与工具各说各话（毛额两分支口径已废弃）。
+  const inc = {}, exp = {}; let count = 0, cntImport = 0; const rows = [];
+  (D.tables.txns || []).forEach(function(t){
+    if (String(t.date || '').slice(0, 7) !== mk) return;
+    count++; if (t.source === 'import') cntImport++;
+    const amt = Number(t.amount);
+    if (!isFinite(amt) || !t.from_account || !t.to_account) return;  // 坏行不进合计
+    if (accs[t.to_account] === 'expense') { exp[t.to_account] = (exp[t.to_account] || 0) + amt; rows.push(t); }
+    if (accs[t.from_account] === 'expense') exp[t.from_account] = (exp[t.from_account] || 0) - amt;
+    if (accs[t.from_account] === 'income') inc[t.from_account] = (inc[t.from_account] || 0) + amt;
+    if (accs[t.to_account] === 'income') inc[t.to_account] = (inc[t.to_account] || 0) - amt;
+  });
+  const r2 = (x)=>Math.round(x * 100) / 100;
+  return { inc, exp, rows, count, cntImport,
+    iTotal: r2(Object.keys(inc).reduce((s,k)=>s+inc[k], 0)),
+    eTotal: r2(Object.keys(exp).reduce((s,k)=>s+exp[k], 0)) };
+}
+
+function render(){
+  const D = window.DASHBOARD_DATA;   // 取数放执行时：boot 链异步加载 data.js 后仍能拿到
+  if (!D || !D.agent) { $('coach').textContent = '暂无数据：先运行 tools/data.py serve 重建 dashboard/data.js'; return; }
+  const mk = monthKey(OFFSET);
+  const accs = {}; (D.tables.accounts || []).forEach(function(a){ accs[a.name] = a.type; });
+  const cur = aggMonth(D, accs, mk);
+  const net = Math.round((cur.iTotal - cur.eTotal) * 100) / 100;
+  const dim = daysInMonth(mk);
+  const isCurrent = OFFSET >= 0;
+  const now = new Date();
+  const daysUsed = isCurrent ? now.getDate() : dim;
+
+  $('range').textContent = mk + '-01 至 ' + mk + '-' + MON(dim)
+    + (isCurrent ? '（进行中 · 今天 ' + now.getDate() + ' 号）' : ' · 共 ' + dim + ' 天');
+  $('mlabel').textContent = mk.split('-')[0] + ' · ' + MON(Number(mk.split('-')[1]));
+
+  // —— KPI ——
+  const kpis = [
+    { lb:'收入（元）', num: yuan(cur.iTotal), gold: cur.iTotal > 0, sub: Object.keys(cur.inc).length + ' 类' },
+    { lb:'支出（元）', num: yuan(cur.eTotal), gold: false,
+      sub: cur.count ? '日均 ' + yuan(cur.eTotal / daysUsed) + '（按 ' + daysUsed + ' 天）' : '无支出' },
+    { lb:'结余（元）', num: yuan(net), gold: net > 0, cls: net < 0 ? 'bad' : '', sub: '收入 − 支出' },
+    { lb:'记账笔数', num: cur.count + ' 笔', gold: cur.count > 0,
+      sub: '手记 ' + (cur.count - cur.cntImport) + ' · 导入 ' + cur.cntImport }
+  ];
+  $('kpis').innerHTML = kpis.map(k=>'<div class="kpi"><div class="lb">' + esc(k.lb) + '</div>'
+    + '<div class="num ' + (k.gold ? 'gold' : '') + ' ' + (k.cls || '') + '">' + esc(k.num) + '</div>'
+    + '<div class="sub">' + esc(k.sub) + '</div></div>').join('');
+
+  // —— 收支类别（横条，按金额降序）——
+  function hbars(obj, total, green){
+    const keys = Object.keys(obj).sort((a,b)=>obj[b]-obj[a]);
+    const max = keys.length ? obj[keys[0]] : 0;
+    return keys.map(k=>'<div class="hrow"><div class="t"><span>' + esc(k) + '</span><span>' + esc(yuan(obj[k]))
+      + (total > 0 ? ' · ' + Math.round(obj[k] / total * 100) + '%' : '') + '</span></div>'
+      + '<div class="hbar' + (green ? ' green' : '') + '"><span style="width:'
+      + (max > 0 ? Math.max(2, obj[k] / max * 100) : 0).toFixed(1) + '%"></span></div></div>').join('');
+  }
+  const expKeys = Object.keys(cur.exp), incKeys = Object.keys(cur.inc);
+  $('expaux').textContent = expKeys.length ? '共 ' + expKeys.length + ' 类' : '';
+  $('incaux').textContent = incKeys.length ? '共 ' + incKeys.length + ' 类' : '';
+  $('expbars').innerHTML = expKeys.length ? hbars(cur.exp, cur.eTotal, false)
+    : '<span style="color:var(--muted);font-size:13px">该月没有支出记录</span>';
+  $('incbars').innerHTML = incKeys.length ? hbars(cur.inc, cur.iTotal, true)
+    : '<span style="color:var(--muted);font-size:13px">该月没有收入记录</span>';
+
+  // —— 预算执行（该月 budgets × 当月实支）——
+  const budgets = (D.tables.budgets || []).filter(b=>b.month === mk)
+    .sort((a,b)=>Number(a.amount||0) - Number(b.amount||0));
+  let overs = [];
+  $('budgets').innerHTML = budgets.length ? budgets.map(b=>{
+    const amt = Number(b.amount) || 0;
+    const spent = cur.exp[b.category] || 0;
+    const pct = amt > 0 ? spent / amt : 0;
+    const pctTxt = Math.round(pct * 100);
+    const col = pct > 1 ? 'var(--bad)' : pct > 0.9 ? 'var(--warn)' : 'var(--gold)';
+    if (pct > 1) overs.push(b.category);
+    return '<div class="goal"><div class="t"><span>' + esc(b.category) + '</span><span>'
+      + esc(yuan(spent)) + ' / ' + esc(yuan(amt)) + ' · ' + pctTxt + '%</span></div>'
+      + '<div class="gbar"><span style="width:' + Math.min(100, pct * 100).toFixed(1) + '%;background:' + col + '"></span></div></div>';
+  }).join('') : '<span style="color:var(--muted);font-size:13px">该月未设预算</span>';
+
+  // —— Top 开销 ——
+  $('topaux').textContent = cur.rows.length ? '当月前 5 笔' : '';
+  $('top-head').innerHTML = '<tr><th>日期</th><th>去向</th><th class="num">金额（元）</th><th>备注</th></tr>';
+  const top5 = cur.rows.slice().sort((a,b)=>(Number(b.amount)||0) - (Number(a.amount)||0)).slice(0, 5);
+  $('top-body').innerHTML = top5.length ? top5.map(t=>'<tr><td>' + esc(t.date) + '</td><td>'
+    + esc(t.from_account) + ' → ' + esc(t.to_account) + '</td><td class="num">' + esc(yuan(t.amount))
+    + '</td><td>' + (t.note ? esc(t.note) : '—') + '</td></tr>').join('')
+    : '<tr><td colspan="4" style="color:var(--muted)">该月没有开销记录</td></tr>';
+
+  // —— 账房视角（确定性规则，只摆事实不下结论，禁编造）——
+  const parts = [];
+  if (!cur.count) {
+    parts.push('该月没有任何流水记录');
+  } else {
+    parts.push('收入 ' + yuan(cur.iTotal) + ' 元，支出 ' + yuan(cur.eTotal) + ' 元，结余 '
+      + (net >= 0 ? '+' : '') + yuan(net) + ' 元');
+  }
+  if (overs.length) parts.push(overs.length + ' 类预算超支：' + overs.slice(0, 3).join('、')
+    + (overs.length > 3 ? ' 等' : ''));
+  const prev = aggMonth(D, accs, mkShift(mk, -1));
+  if (prev.eTotal > 0 && cur.eTotal > 0) {
+    const diff = cur.eTotal - prev.eTotal;
+    if (Math.abs(diff) >= 100 && Math.abs(diff) / prev.eTotal >= 0.3) {
+      parts.push('支出环比' + (diff > 0 ? '上升' : '下降') + ' ' + Math.round(Math.abs(diff) / prev.eTotal * 100)
+        + '%（上月 ' + yuan(prev.eTotal) + ' 元）');
+    }
+  }
+  const seen = {}; let dupCnt = 0;
+  cur.rows.forEach(t=>{
+    const k = t.date + '|' + t.amount + '|' + t.to_account;
+    seen[k] = (seen[k] || 0) + 1;
+    if (seen[k] === 2) dupCnt++;
+  });
+  if (dupCnt) parts.push('疑似重复扣款 ' + dupCnt + ' 组（同日同金额同去向），请人工核对');
+  $('coach').innerHTML = '<b>账房视角</b>' + parts.slice(0, 4).join('；') + '。';
+
+  $('foot').textContent = '数据黄金源：本页全部数字由本地账本（txns/accounts/budgets）当场推导，余额与净资产永不存死数，'
+    + '无任何记忆或推测 · 只呈现客观信息，不构成投资建议 · 生成于 ' + new Date().toLocaleString('zh-CN') + ' · AgentCrew';
+}
+function shift(n){ OFFSET += n; render(); }
+
+</script>
+
+<!-- 数据加载 boot 链：面板注入 → 同目录（面板 URL 映射存档区）→ lite 存档区 → 收编区存档区 -->
+<script>
+(function boot(){
+  if (window.DASHBOARD_DATA !== undefined) { render(); return; }
+  var candidates = [
+    'data.js',
+    '../_save/dashboard/data.js',
+    '../../../_save/agents/agentcrew.finance/dashboard/data.js'
+  ];
+  var i = 0;
+  (function next(){
+    if (i >= candidates.length) { render(); return; }   // 两侧都没有 → render 显示"暂无数据"
+    var s = document.createElement('script');
+    s.src = candidates[i++];
+    s.onload = function(){ render(); };
+    s.onerror = function(){ next(); };
+    document.head.appendChild(s);
+  })();
+})();
+</script>
+</body>
+</html>
