@@ -18,7 +18,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fitlib as F  # noqa: E402
 
-# 旧表 → 新表 与字段改名映射（新旧数据模型差异见 docs/original-analysis.md §三）
+# 旧表 → 新表 与字段改名映射（新旧数据模型差异见 docs/2026-09-18-FitMate功能还原分析.md §三）
 MAPS = {
     "diet_logs": ("diet_logs", {"calories_est": "calories", "protein_est": "protein",
                                 "carbs_est": "carbs", "fat_est": "fat"}),
