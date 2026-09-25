@@ -5,6 +5,8 @@
   watch    确定性监控：扫描程序区违规增量数据（不靠 LLM 自觉）
            退出码 0=干净，1=有违规（可挂计划任务/CI/面板启动钩子）
   reset    新游戏：二次确认后删除整个存档，项目回到原点
+  export   打包整个存档为单文件 crew-save-<时间戳>.asave（标准 zip，含全部个人数据）
+  import   从 .asave 单文件包恢复存档——四道闸+自动备份+原子换位（删除类操作，--dry-run 可预演）
 """
 from __future__ import annotations
 
@@ -99,6 +101,82 @@ def cmd_reset(a) -> int:
     return B.ok({"reset": True, "note": "存档已清除并重建空档——项目回到原点（新游戏）"})
 
 
+def cmd_export(a) -> int:
+    B.utf8_console()
+    root = B.find_repo_root()
+    if not root:
+        return B.fail("未找到 AgentCrew 仓库根")
+    if a.dry_run:  # 零写入：不取锁、不落盘
+        try:
+            plan = B.export_preview(root, out=a.out)
+        except B.SaveGateError as e:
+            return B.fail(str(e), {"reason_code": e.code, **e.payload}, code=0)
+        return B.ok({"dry_run": True, **plan})
+    try:
+        with B.save_lock(root):
+            r = B.pack_save(root, out=a.out)
+    except B.SaveGateError as e:  # 业务拒绝：退出码 0 + reason_code（PARADIGM §6）
+        return B.fail(str(e), {"reason_code": e.code, **e.payload}, code=0)
+    except OSError as e:  # 技术性失败：非零退出
+        return B.fail(f"导出失败（IO/权限）：{e}", code=1)
+    return B.ok({"file": r["file"], "bytes": r["bytes"], "entries": r["entries"],
+                 "rows_total": r["rows_total"], "save_version": r["save_version"],
+                 "agents": r["agents"],
+                 "warning": "此文件含全部个人数据，谨防外泄"})
+
+
+def cmd_import(a) -> int:
+    B.utf8_console()
+    root = B.find_repo_root()
+    if not root:
+        return B.fail("未找到 AgentCrew 仓库根")
+    pkg = os.path.abspath(a.file)
+    if not os.path.isfile(pkg):
+        return B.fail("存档包不存在", {"reason_code": "file_not_found", "file": pkg}, code=0)
+    if a.dry_run:  # 只跑闸①②③纯读包零写入（不取锁）
+        try:
+            prev = B.inspect_package(pkg, root, force=a.force)
+        except B.SaveGateError as e:
+            return B.fail(str(e), {"reason_code": e.code, **e.payload}, code=0)
+        return B.ok({"dry_run": True, "file": pkg, "entries": prev["entries"],
+                     "save_version": prev["save_version"],
+                     "plan": {"backup_would_be": prev["auto_backup_name"],
+                              "migrate_would": prev["will_migrate"],
+                              "replace": True},
+                     "warnings": prev["warnings"]})
+    try:
+        with B.save_lock(root):
+            try:
+                r = B.import_save(root, pkg, force=a.force)
+            except B.SaveGateError as e:
+                return B.fail(str(e), {"reason_code": e.code, **e.payload}, code=0)
+            migrated: list[int] = []
+            if r["save_version"] < B.SAVE_VERSION_CURRENT:
+                # 旧版本档：换位成功后在锁内跑阶梯迁移（平级脚本单向依赖本库，
+                # 函数内延迟 import 防循环导入——agentcrew_lib 禁顶层 import migrate_save）
+                try:
+                    import migrate_save
+                    migrated = migrate_save.migrate_chain(root)
+                except Exception as e:  # noqa: BLE001  迁移炸=程序 bug；auto-backup 兜底
+                    return B.fail(f"存档已导入但阶梯迁移失败（可用自动备份回退）：{e}",
+                                  {"reason_code": "migrate_failed", "backup": r["backup"]}, code=1)
+    except B.SaveGateError as e:
+        return B.fail(str(e), {"reason_code": e.code, **e.payload}, code=0)
+    except OSError as e:
+        return B.fail(f"导入失败（IO/权限）：{e}", code=1)
+    mani = B.load_save_manifest(root)
+    final_v = (mani.get("save_version")
+               if isinstance(mani, dict) and not mani.get("_corrupt") else r["save_version"])
+    payload = {"file": pkg, "imported_entries": r["imported_entries"], "backup": r["backup"],
+               "migrated": migrated, "save_version": final_v,
+               "note": (f"旧档已自动备份：{r['backup']}" if r["backup"]
+                        else "目标为空档（首装/跨机迁移），未产生自动备份")}
+    if r.get("forced_downgrade"):
+        payload["warning"] = (f"已强制安装较新存档（包 v{r['package_v']} > 程序支持 v{r['program_v']}）："
+                              "当前程序可能无法读取新版结构，风险自担")
+    return B.ok(payload)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="AgentCrew 存档管理")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -106,8 +184,18 @@ def main() -> int:
     sub.add_parser("watch")
     p_r = sub.add_parser("reset")
     p_r.add_argument("--yes", action="store_true", help="跳过交互确认（脚本用）")
+    p_e = sub.add_parser("export", help="打包整个存档为单文件 .asave（含全部个人数据）")
+    p_e.add_argument("--out", default=None,
+                     help="落点：目录（目录内默认名）或完整文件路径；缺省=存档根上级目录")
+    p_e.add_argument("--dry-run", action="store_true", help="只报告将打包的内容与大小，不落盘")
+    p_i = sub.add_parser("import", help="从 .asave 单文件包恢复存档（整档替换，目标非空自动先备份）")
+    p_i.add_argument("file", help="存档包路径（不校验扩展名，只认包内 manifest）")
+    p_i.add_argument("--force", action="store_true",
+                     help="允许安装比程序更新的存档（降级风险自担）")
+    p_i.add_argument("--dry-run", action="store_true", help="只检查包与预演计划（闸①②③），零写入")
     a = ap.parse_args()
-    return {"status": cmd_status, "watch": cmd_watch, "reset": cmd_reset}[a.cmd](a)
+    return {"status": cmd_status, "watch": cmd_watch, "reset": cmd_reset,
+            "export": cmd_export, "import": cmd_import}[a.cmd](a)
 
 
 if __name__ == "__main__":

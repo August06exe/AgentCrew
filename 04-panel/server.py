@@ -10,6 +10,9 @@ API：
   POST /api/agent/<id>/toggle              active ⇄ paused
   POST /api/install                        {mode: zip|path|git, ...} → 收编
   POST /api/release                        {id} → 放归
+  POST /api/save-export                    {} → 存档单文件导出（透传 save.py export）
+  POST /api/save-import/preview            {path}|{b64,filename} → 导入预览（闸①②③只读）+ 一次性 token
+  POST /api/save-import/confirm            {token} → 确认导入（sha256 复验后透传 save.py import）
   GET  /jump/<id>                          刷新该助理看板数据后跳转
 静态：/agent-file/<id>/<path…> 各助理文件（含看板）
 """
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import io
 import json
 import os
@@ -24,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,6 +40,10 @@ import agentcrew_lib as B  # noqa: E402
 PORT = 7530
 TABLE_RE = __import__("re").compile(r"^[a-z][a-z0-9_]*$")
 INSTALL_PENDING: dict[str, dict] = {}  # token -> {"dir":..., "tmp": bool, "ts": float}
+# 存档导入两步确认：token -> {"pkg_path","sha256","ts","staged"}（staged=b64 暂存包路径，用毕即删）
+IMPORT_PENDING: dict[str, dict] = {}
+IMPORT_TOKEN_TTL = 3600      # 与安装页一致：1 小时过期
+IMPORT_TOKEN_MAX = 50        # 与安装页一致：上限 50 丢最旧
 
 
 def agent_save(agent_id: str) -> str:
@@ -102,6 +111,150 @@ def rows_to_csv(table: str, rows: list[dict]) -> str:
     for r in rows:
         w.writerow(json.dumps(r[k], ensure_ascii=False) if isinstance(r.get(k), (dict, list)) else r.get(k, "") for k in keys)
     return buf.getvalue()
+
+
+# ---------- 存档备份/恢复（v0.3）----------
+# 设计定稿：07-ops/2026-09-26-存档导出导入设计定稿.md。
+# 三端点均为模块级函数（可被 06-tests 函数级加载测试），Handler 只委托。
+# 双层两步确认：服务端真防线 = preview/confirm 双端点 + 一次性 token + sha256 指纹复验；
+# 前端勾选框只是表达层。CLI --force 强装旧/新版本口子只在 save.py，面板不提供。
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _stage_b64(b64: str) -> str:
+    """b64 上传的包先落系统临时目录（算 sha256、供 confirm 复用）。
+    全量个人数据不滞留 %TEMP%：confirm 无论成败、preview 失败、token 过期/淘汰都删暂存文件。"""
+    raw = base64.b64decode(b64)  # binascii.Error → ValueError，由调用方回 400
+    fd, tmp = tempfile.mkstemp(prefix="crew-import-staging-", suffix=".asave")
+    with os.fdopen(fd, "wb") as f:
+        f.write(raw)
+    return tmp
+
+
+def _drop_import_token(token: str) -> dict | None:
+    v = IMPORT_PENDING.pop(token, None)
+    if v and v.get("staged"):
+        try:
+            os.remove(v["staged"])
+        except OSError:
+            pass
+    return v
+
+
+def _prune_import_tokens(now: float) -> None:
+    for k in [k for k, v in IMPORT_PENDING.items() if now - v["ts"] > IMPORT_TOKEN_TTL]:
+        _drop_import_token(k)
+    while len(IMPORT_PENDING) >= IMPORT_TOKEN_MAX:  # 上限：丢最旧（暂存文件一并删）
+        oldest = min(IMPORT_PENDING, key=lambda k: IMPORT_PENDING[k]["ts"])
+        _drop_import_token(oldest)
+
+
+def api_save_export() -> dict:
+    """一键导出：透传 save.py export 的 stdout JSON（含绝对路径与个人数据提醒）。"""
+    try:
+        r = subprocess.run([sys.executable, B.p(ROOT, "05-scripts", "save.py"), "export"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=300)
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": (r.stderr or r.stdout or "save.py export 无输出")[:300]}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "导出超时（300s）——大档请改用命令行 python 05-scripts/save.py export"}
+
+
+def api_save_import_preview(body: dict) -> tuple[dict, int]:
+    """第一段：闸①②③只读预览（inspect_package，零写入），发一次性 token。
+    path=本机路径（主路径，无大小上限、无暂存）；b64=浏览器上传兜底（暂存盘，用毕即删）。"""
+    import secrets
+    staged = None
+    ok_flag = False
+    try:
+        if body.get("b64"):
+            try:
+                staged = _stage_b64(body["b64"])
+            except Exception:  # noqa: BLE001  坏 b64
+                return {"ok": False, "error": "b64 解码失败，请重新选择文件"}, 400
+            pkg = staged
+        elif body.get("path"):
+            pkg = os.path.abspath(str(body["path"]))
+        else:
+            return {"ok": False, "error": "需提供 path（本机包路径，推荐）或 b64（小文件上传）"}, 400
+        if not os.path.isfile(pkg):
+            return {"ok": False, "reason_code": "file_not_found", "error": f"文件不存在：{pkg}"}, 400
+        digest = _sha256_file(pkg)
+        try:
+            info = B.inspect_package(pkg)  # 闸①②③：结构/manifest/消毒/版本比对，纯读
+        except Exception as e:  # noqa: BLE001  SaveGateError（业务拒绝）与其余异常同路返回
+            reason = getattr(e, "code", None)
+            payload = dict(getattr(e, "payload", None) or {})
+            out = {"ok": False, "error": str(e) or (reason or "预览失败"), **payload}
+            if reason:
+                out["reason_code"] = reason
+            return out, 400
+        # 预览字段以 inspect_package 的权威计算为准（will_migrate/will_backup/备份名/警告）
+        warnings = [str(w) for w in (info.get("warnings") or [])]
+        if not info.get("will_backup"):
+            warnings.append("目标存档为空或不存在：首装导入，不产生自动备份")
+        now = time.time()
+        _prune_import_tokens(now)
+        token = secrets.token_hex(16)
+        IMPORT_PENDING[token] = {"pkg_path": os.path.abspath(pkg), "sha256": digest,
+                                 "ts": now, "staged": staged}
+        ok_flag = True
+        return {"ok": True, "token": token,
+                "preview": {"entries": info.get("entries"), "bytes": info.get("bytes"),
+                            "save_version": info.get("save_version"),
+                            "program_save_version": info.get("program_save_version", B.SAVE_VERSION_CURRENT),
+                            "rows_total": info.get("rows_total", 0),
+                            "agents": info.get("agents") or {},
+                            "will_migrate": info.get("will_migrate") or [],
+                            "will_backup": bool(info.get("will_backup")),
+                            "auto_backup_name": info.get("auto_backup_name"),
+                            "warnings": warnings},
+                "note": "确认导入=整档替换当前存档（目标非空时旧档自动备份）；预览只读未动存档"}, 200
+    finally:
+        if staged and not ok_flag:
+            try:
+                os.remove(staged)
+            except OSError:
+                pass
+
+
+def api_save_import_confirm(token: str) -> tuple[dict, int]:
+    """第二段：token 一次性 + sha256 指纹复验（变了→changed_since_preview），
+    然后透传 save.py import（闸③④+原子换位+迁移由壳层完成）。"""
+    pending = IMPORT_PENDING.pop(token, None)  # 一次性：无论成败即销号
+    try:
+        if not pending:
+            return {"ok": False, "error": "token 无效或已过期，请重新预览"}, 400
+        pkg = pending["pkg_path"]
+        if not os.path.isfile(pkg):
+            return {"ok": False, "reason_code": "file_not_found", "error": "包文件已不存在，请重新预览"}, 400
+        if _sha256_file(pkg) != pending["sha256"]:
+            return {"ok": False, "reason_code": "changed_since_preview",
+                    "error": "包在预览后已被改动，已拦截，请重新预览"}, 400
+        try:
+            r = subprocess.run([sys.executable, B.p(ROOT, "05-scripts", "save.py"), "import", pkg],
+                               capture_output=True, text=True, encoding="utf-8", timeout=300)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "导入超时（300s）——请改用命令行 python 05-scripts/save.py import <文件>"}, 500
+        try:
+            out = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            return {"ok": False, "error": (r.stderr or r.stdout or "save.py import 无输出")[:400]}, 500
+        return out, (200 if out.get("ok") else 400)
+    finally:
+        if pending and pending.get("staged"):
+            try:
+                os.remove(pending["staged"])
+            except OSError:
+                pass
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -246,7 +399,10 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in urllib.parse.urlparse(self.path).path.split("/") if p]
         try:
             body = self._body()
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+            if "too large" in str(e) and parts == ["api", "save-import", "preview"]:
+                return self._json({"ok": False, "error":
+                                   "请求体超过 64MB 上限（约对应 48MB 原始包）——请改用「本机路径」方式导入"}, 400)
             return self._json({"ok": False, "error": "bad request body"}, 400)
 
         if len(parts) == 4 and parts[1] == "agent" and parts[3] == "delete_row":
@@ -299,6 +455,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(json.loads(r.stdout))
             except json.JSONDecodeError:
                 return self._json({"ok": False, "error": (r.stderr or r.stdout)[:300]}, 500)
+
+        if parts == ["api", "save-export"]:
+            return self._json(api_save_export())
+        if parts == ["api", "save-import", "preview"]:
+            payload, code = api_save_import_preview(body)
+            return self._json(payload, code)
+        if parts == ["api", "save-import", "confirm"]:
+            payload, code = api_save_import_confirm(str(body.get("token", "")))
+            return self._json(payload, code)
 
         if parts == ["api", "profile"]:
             prof = body.get("profile") or {}

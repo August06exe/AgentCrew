@@ -36,6 +36,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>
         安装
       </div>
+      <div class="side-item" data-view="backup">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/></svg>
+        备份/恢复
+      </div>
       <div class="side-item" data-view="onboarding">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
         初始化
@@ -132,6 +136,47 @@
       </div>
     </div>
 
+    <div id="viewBackup" class="view" style="display:none">
+      <div class="topbar">
+        <div><h2>备份 / 恢复</h2><div class="sub">整个存档打成一个 .asave 单文件包——备份、换机搬家、给朋友发个档</div></div>
+      </div>
+
+      <div class="bh-panel">
+        <h2>导出存档</h2>
+        <p class="bh-muted">把整个存档（主人档案 + 全部顾问数据与信箱）打包为 <code>crew-save-&lt;时间&gt;.asave</code>，落在存档上级目录。</p>
+        <button onclick="doSaveExport()" id="expBtn">一键导出</button>
+        <div id="expResult" style="display:none;margin-top:10px;font-size:13px"></div>
+      </div>
+
+      <div class="bh-panel" style="border-left:3px solid var(--bh-bad)">
+        <h2>导入存档（整档替换）</h2>
+        <p class="bh-muted">两步走：先预览检查，确认后才动手。目标存档非空时自动先备份为 <code>crew-save-auto-backup-*.asave</code>；旧版本包导入后自动阶梯迁移；全新实例无档也可直接导入。</p>
+        <p class="bh-muted">比程序新的包会被拦截（防降级安装）——确需强装请用命令行 <code>python 05-scripts/save.py import &lt;文件&gt; --force</code>，面板不提供强制口。</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          <input type="text" id="impPath" placeholder="包的完整路径，如 D:\Backups\crew-save-20260926-080000.asave" style="flex:1;min-width:260px">
+          <span class="bh-muted">或</span>
+          <input type="file" id="impFile" accept=".asave,.zip">
+        </div>
+        <div style="margin-top:10px">
+          <button onclick="doSavePreview()" id="impPreviewBtn">预览检查</button>
+        </div>
+        <div id="impPreviewBox" style="display:none;margin-top:12px">
+          <table class="bh-table" id="impTable"></table>
+          <div id="impWarn" style="margin-top:10px;font-size:13px"></div>
+          <div style="margin-top:10px;border:1.5px solid var(--bh-bad);border-radius:10px;padding:10px 12px;color:var(--bh-bad);font-size:13px">
+            ⚠️ 导入将<b>整档替换</b>当前存档（旧档自动备份）。lite 独立助理自带的 _save 不在实例包内，搬家请单独拷贝它的 _save。
+            <label style="display:block;margin-top:8px;color:var(--bh-text);font-weight:normal">
+              <input type="checkbox" id="impAck" onchange="el('impConfirmBtn').disabled=!this.checked">
+              我已了解：导入会替换当前全部存档
+            </label>
+          </div>
+          <button onclick="doSaveConfirm()" id="impConfirmBtn" disabled style="margin-top:10px">确认导入</button>
+        </div>
+        <div id="impResult" style="display:none;margin-top:10px;font-size:13px"></div>
+        <p class="bh-muted" style="margin-top:8px;font-size:12px">导入前建议先在「总览」页暂停各助理；导入瞬间数据页可能短暂打不开，属正常。</p>
+      </div>
+    </div>
+
     <div id="viewOnboarding" class="view" style="display:none">
       <div class="topbar">
         <div><h2>初始化</h2><div class="sub">和 IM 两轮聊天殊途同归：都写同一份 01-master\profile.json</div></div>
@@ -190,6 +235,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>
       安装
     </div>
+    <div class="tb" data-view="backup">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/></svg>
+      备份
+    </div>
     <div class="tb" data-view="onboarding">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
       初始化
@@ -209,6 +258,12 @@ function toast(msg, bad){
   t.textContent = msg; t.style.display = 'block';
   t.style.color = bad ? 'var(--bh-bad)' : 'var(--bh-good)';
   setTimeout(()=>{ t.style.display='none'; }, 4000);
+}
+function fmtSize(n){
+  if (n === null || n === undefined) return '？';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+  return (n/1048576).toFixed(2) + ' MB';
 }
 async function api(path, body){
   const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {};
@@ -412,6 +467,92 @@ async function rel(id){
   const r = await api('/api/release', {id});
   toast(r.ok ? '已放归' : (r.error||'失败'), !r.ok);
   if (r.ok) setTimeout(()=>location.reload(), 1000);
+}
+
+/* ================= 备份/恢复 ================= */
+/* 双层两步确认：服务端一次性 token + sha256 复验是真防线；下面的勾选框只是表达层。 */
+let IMP_TOKEN = null;
+async function doSaveExport(){
+  const btn = el('expBtn');
+  btn.disabled = true;
+  const r = await api('/api/save-export', {});
+  btn.disabled = false;
+  const box = el('expResult');
+  box.style.display = 'block';
+  if (r.ok) {
+    box.innerHTML = '✅ 已导出：<code>' + esc(r.file) + '</code>（' + (r.entries ?? '？') + ' 个条目 / ' + fmtSize(r.bytes) + '）'
+      + '<br><span class="bh-bad">⚠️ ' + esc(r.warning || '此文件含全部个人数据，谨防外泄') + '</span>';
+    toast('导出完成');
+  } else {
+    box.innerHTML = '<span class="bh-bad">导出失败：' + esc(r.error || r.reason_code || '未知原因') + '</span>'
+      + '<br><span class="bh-muted">导出超时或失败？改用命令行 <code>python 05-scripts/save.py export</code></span>';
+    toast('导出失败', true);
+  }
+}
+async function doSavePreview(){
+  const body = {};
+  const f = el('impFile').files[0];
+  if (f) {
+    if (f.size > 48*1024*1024) { toast('文件超过 48MB，请改用本机路径输入', true); return; }
+    body.filename = f.name;
+    body.b64 = await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.readAsDataURL(f); });
+  } else if (el('impPath').value.trim()) {
+    body.path = el('impPath').value.trim();
+  } else { toast('先填包路径或选择文件', true); return; }
+  const btn = el('impPreviewBtn');
+  btn.disabled = true;
+  const r = await api('/api/save-import/preview', body);
+  btn.disabled = false;
+  el('impPreviewBox').style.display = 'none';
+  const res = el('impResult');
+  res.style.display = 'block';
+  if (!r.ok) {
+    if (r.reason_code === 'save_newer_than_program') {
+      res.innerHTML = '<span class="bh-bad">已拦截：此包（v' + esc(r.package_v ?? '？') + '）比程序（v' + esc(r.program_v ?? '？') + '）新，防降级安装。'
+        + '确需强装请用命令行 <code>python 05-scripts/save.py import &lt;文件&gt; --force</code>，面板不提供强制口。</span>';
+    } else {
+      res.innerHTML = '<span class="bh-bad">已拦截：' + esc(r.error || r.reason_code || '预览失败') + '</span>';
+    }
+    toast('预览未通过：' + (r.reason_code || '失败'), true);
+    return;
+  }
+  res.style.display = 'none';
+  IMP_TOKEN = r.token;
+  const p = r.preview;
+  const agentNames = Object.keys(p.agents || {});
+  el('impTable').innerHTML = [
+    ['条目数', p.entries ?? '？'],
+    ['解压体积', fmtSize(p.bytes)],
+    ['数据行合计', p.rows_total ?? '？'],
+    ['包内版本', 'v' + p.save_version],
+    ['程序版本', 'v' + p.program_save_version],
+    ['将自动迁移', (p.will_migrate||[]).length ? 'v' + p.will_migrate.join(' → v') : '无需迁移'],
+    ['自动备份', p.will_backup ? '会——' + esc(p.auto_backup_name || 'crew-save-auto-backup-*.asave') : '目标为空档，不产生备份'],
+    ['助理切片', agentNames.length ? agentNames.length + ' 家（' + agentNames.join('、') + '）' : '（包内无助理切片）'],
+  ].map(x=>`<tr><th>${esc(x[0])}</th><td>${x[1]}</td></tr>`).join('');
+  el('impWarn').innerHTML = (p.warnings||[]).map(w=>'· ' + esc(w)).join('<br>');
+  el('impAck').checked = false;
+  el('impConfirmBtn').disabled = true;
+  el('impPreviewBox').style.display = 'block';
+}
+async function doSaveConfirm(){
+  if (!IMP_TOKEN) { toast('先预览', true); return; }
+  const btn = el('impConfirmBtn');
+  btn.disabled = true;           // 请求期间禁用防双发（token 一次性天然兜底）
+  const r = await api('/api/save-import/confirm', {token: IMP_TOKEN});
+  IMP_TOKEN = null;              // 一次性：成败都销号，失败须重新预览
+  const box = el('impResult');
+  box.style.display = 'block';
+  if (r.ok) {
+    box.innerHTML = '✅ 导入完成：' + (r.imported_entries ?? '？') + ' 个条目，存档版本 v' + esc(r.save_version ?? '？')
+      + (r.backup ? ('；旧档已备份：<code>' + esc(r.backup) + '</code>') : '；目标为空档，未产生备份')
+      + ((r.migrated && r.migrated.length) ? ('；已迁移：' + r.migrated.map(v=>'v'+esc(v)).join(' → ')) : '');
+    toast('导入完成');
+  } else {
+    box.innerHTML = '<span class="bh-bad">导入失败：' + esc(r.error || r.reason_code || '失败') + '</span>'
+      + '<br><span class="bh-muted">token 已作废，请重新「预览检查」后再试。</span>';
+    toast('导入失败', true);
+  }
 }
 
 /* ================= 初始化 ================= */

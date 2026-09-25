@@ -16,6 +16,7 @@ SUITES = [
     ("finance冒烟", [PY, os.path.join(ROOT, "02-agents", "agentcrew.finance", "tests", "smoke.py")]),
     ("finance全流程", [PY, os.path.join(ROOT, "02-agents", "agentcrew.finance", "tests", "test_flow.py")]),
     ("联邦模拟器", [PY, os.path.join(HERE, "simulator.py")]),
+    ("存档导出导入", [PY, os.path.join(HERE, "test_savepack.py")]),
 ]
 
 
