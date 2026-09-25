@@ -134,7 +134,7 @@ python 05-scripts/doctor.py        # 体检：环境就绪检查
 **个人实例（生产姿势）**：框架仓库是"厂"，日常使用请生成你自己的家——
 
 ```bash
-python 05-scripts/make-instance.py --to ../3004.1 --name my-home
+python 05-scripts/make-instance.py --to ../my-home --name my-home
 ```
 
 一切增量信息（档案/数据/信箱）只落在实例的 `_save\` 里；程序更新替换 `_save\` 以外的部分即可，旧档自动兼容。
