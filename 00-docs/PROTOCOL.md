@@ -176,7 +176,8 @@
 ```
 助理A在回执/交办处理中声明需要B的数据（need_data: B.<table>, purpose）
   → 总管向主人转达并请求批准
-  → 批准：authz.py 从B的 data\<table>.jsonl 导出 → 写快照 → 投放A的 inbox\context_refs
+  → 批准：authz.py 从B的存档切片导出（托管=<save>/agents/B/data\<table>.jsonl；
+         lite 放归助理=B 自带 _save\data\<table>.jsonl）→ 写快照 → 投放A的 inbox\context_refs
   → 拒绝：总管回复A "未授权"，A须以不依赖该数据的方式完成或 refused
 ```
 

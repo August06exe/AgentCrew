@@ -253,6 +253,16 @@
 /* ================= 公共 ================= */
 function el(id){ return document.getElementById(id); }
 function esc(s){ return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+/* 内联事件属性是「HTML 属性 × JS 字符串」双上下文：单用 esc() 时属性解码会把 ' 复原、越出字符串。
+   先 JSON.stringify 出合法 JS 字面量，再过 esc() 适配属性，两条上下文都安全。 */
+function jsq(s){ return esc(JSON.stringify(String(s===null||s===undefined?'':s))); }
+/* 行删除 / 看板跳转不再拼内联 JS 字符串，统一 data-* + 事件委托（值只走 HTML 属性上下文）。 */
+document.addEventListener('click', e => {
+  const del = e.target.closest('[data-del]');
+  if (del) { delRow(del.dataset.del); return; }
+  const jmp = e.target.closest('[data-jump]');
+  if (jmp) { location.href = '/jump/' + encodeURIComponent(jmp.dataset.token || ''); }
+});
 function toast(msg, bad){
   const t = el('toast');
   t.textContent = msg; t.style.display = 'block';
@@ -304,7 +314,7 @@ function renderSidebar(){
       <span class="nm">${esc(a.name)}<small>${esc(a.status==='active'?'运行中':a.status==='paused'?'已暂停':'未登记')}</small></span>
       ${a.status!=='unregistered'?`
       <label class="sw" onclick="event.stopPropagation()">
-        <input type="checkbox" ${a.status==='active'?'checked':''} onchange="toggleAgent('${esc(a.id)}', this)">
+        <input type="checkbox" ${a.status==='active'?'checked':''} onchange="toggleAgent(${jsq(a.id)}, this)">
         <span class="track"><span class="knob"></span></span>
       </label>`:''}
     </div>`).join('') || '<div class="side-agent"><span class="bh-muted" style="font-size:12px">还没有助理</span></div>';
@@ -329,7 +339,7 @@ async function renderOverview(){
     ['运行中', active],
     ['提醒规则', '…'],
     ['初始化', STATE.profile.complete?'完成':'待建档'],
-  ].map(x=>`<div class="stat"><div class="lb">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
+  ].map(x=>`<div class="stat"><div class="lb">${esc(x[0])}</div><div class="v">${esc(x[1])}</div></div>`).join('');
 
   el('wall').innerHTML = STATE.agents.map(a=>`
     <div class="acard">
@@ -338,16 +348,16 @@ async function renderOverview(){
         <div class="who"><b>${esc(a.name)}</b><small>${esc(a.id)} · v${esc(a.version)}</small></div>
         ${a.status!=='unregistered'?`
         <label class="sw" title="运行 / 暂停">
-          <input type="checkbox" ${a.status==='active'?'checked':''} onchange="toggleAgent('${esc(a.id)}', this)">
+          <input type="checkbox" ${a.status==='active'?'checked':''} onchange="toggleAgent(${jsq(a.id)}, this)">
           <span class="track"><span class="knob"></span></span>
         </label>`:''}
       </div>
       <div class="meta"><span class="${ledClass(a)}"></span>${a.status==='active'?'运行中':esc(a.status)} · ${a.mode==='managed'?'托管':'lite'}${a.reminders_enabled===false?' · 提醒已关':''}</div>
       <div class="desc">${esc((a.domain||[]).join('；'))}</div>
       <div class="ops">
-        ${a.dashboard && a.dashboard.up && a.dashboard.main
-          ? `<button onclick="location.href='/jump/${encodeURIComponent(a.id)}'">打开看板</button>` : ''}
-        <button onclick="gotoData('${esc(a.id)}')">数据</button>
+        ${a.dashboard && a.dashboard.up && a.dashboard.main && (STATE.jump||{})[a.id]
+          ? `<button data-jump data-token="${esc(STATE.jump[a.id])}">打开看板</button>` : ''}
+        <button onclick="gotoData(${jsq(a.id)})">数据</button>
         <span class="spacer"></span>
         <span class="bh-muted" style="font-size:11px">${(a.tables||[]).length} 张表</span>
       </div>
@@ -408,7 +418,7 @@ async function loadRows(){
   document.querySelector('#dRows thead').innerHTML = '<tr>' + keys.map(k=>`<th>${esc(k)}</th>`).join('') + '<th></th></tr>';
   document.querySelector('#dRows tbody').innerHTML = rows.slice().reverse().map(row=>
     '<tr>' + keys.map(k=>`<td>${esc(row[k])}</td>`).join('')
-    + `<td><button onclick="delRow('${esc(row._id||'')}')">删</button></td></tr>`
+    + `<td><button data-del="${esc(row._id||'')}">删</button></td></tr>`
   ).join('') || '<tr><td colspan="9" class="bh-muted">空表</td></tr>';
 }
 async function delRow(rowId){
@@ -460,7 +470,7 @@ async function createFromTemplate(){
 function renderInstallList(){
   document.querySelector('#iList tbody').innerHTML = STATE.agents.map(a=>`
     <tr><td>${esc(a.id)}</td><td>${esc(a.name)}</td><td>${esc(a.status)}</td>
-    <td>${a.status!=='unregistered'?`<button onclick="rel('${esc(a.id)}')">放归</button>`:''}</td></tr>`).join('');
+    <td>${a.status!=='unregistered'?`<button onclick="rel(${jsq(a.id)})">放归</button>`:''}</td></tr>`).join('');
 }
 async function rel(id){
   if (!confirm(`放归 ${id}？它会移出收编区（到仓库同级 _standalone），回 lite 独立模式，数据随它走。`)) return;
@@ -480,7 +490,7 @@ async function doSaveExport(){
   const box = el('expResult');
   box.style.display = 'block';
   if (r.ok) {
-    box.innerHTML = '✅ 已导出：<code>' + esc(r.file) + '</code>（' + (r.entries ?? '？') + ' 个条目 / ' + fmtSize(r.bytes) + '）'
+    box.innerHTML = '✅ 已导出：<code>' + esc(r.file) + '</code>（' + esc(r.entries ?? '？') + ' 个条目 / ' + esc(fmtSize(r.bytes)) + '）'
       + '<br><span class="bh-bad">⚠️ ' + esc(r.warning || '此文件含全部个人数据，谨防外泄') + '</span>';
     toast('导出完成');
   } else {
@@ -527,9 +537,9 @@ async function doSavePreview(){
     ['包内版本', 'v' + p.save_version],
     ['程序版本', 'v' + p.program_save_version],
     ['将自动迁移', (p.will_migrate||[]).length ? 'v' + p.will_migrate.join(' → v') : '无需迁移'],
-    ['自动备份', p.will_backup ? '会——' + esc(p.auto_backup_name || 'crew-save-auto-backup-*.asave') : '目标为空档，不产生备份'],
+    ['自动备份', p.will_backup ? '会——' + (p.auto_backup_name || 'crew-save-auto-backup-*.asave') : '目标为空档，不产生备份'],
     ['助理切片', agentNames.length ? agentNames.length + ' 家（' + agentNames.join('、') + '）' : '（包内无助理切片）'],
-  ].map(x=>`<tr><th>${esc(x[0])}</th><td>${x[1]}</td></tr>`).join('');
+  ].map(x=>`<tr><th>${esc(x[0])}</th><td>${esc(x[1])}</td></tr>`).join('');
   el('impWarn').innerHTML = (p.warnings||[]).map(w=>'· ' + esc(w)).join('<br>');
   el('impAck').checked = false;
   el('impConfirmBtn').disabled = true;
@@ -544,7 +554,7 @@ async function doSaveConfirm(){
   const box = el('impResult');
   box.style.display = 'block';
   if (r.ok) {
-    box.innerHTML = '✅ 导入完成：' + (r.imported_entries ?? '？') + ' 个条目，存档版本 v' + esc(r.save_version ?? '？')
+    box.innerHTML = '✅ 导入完成：' + esc(r.imported_entries ?? '？') + ' 个条目，存档版本 v' + esc(r.save_version ?? '？')
       + (r.backup ? ('；旧档已备份：<code>' + esc(r.backup) + '</code>') : '；目标为空档，未产生备份')
       + ((r.migrated && r.migrated.length) ? ('；已迁移：' + r.migrated.map(v=>'v'+esc(v)).join(' → ')) : '');
     toast('导入完成');

@@ -18,6 +18,11 @@ import agentcrew_lib as B  # noqa: E402
 EXCLUDE_TOP = {".git", ".zcode", "07-ops", "_standalone", "_local", "_save", "__pycache__"}
 
 
+def registry_ready(instance_root: str) -> bool:
+    """收编登记是否就绪（存档口径：registry 在 <实例>/_save/master/registry.json）。"""
+    return os.path.isfile(B.registry_path(instance_root))
+
+
 def ignore_for_instance(directory: str, names: list[str]) -> list[str]:
     """按【相对路径】判定排除：copytree 的 directory 是被列举内容的父目录，
     02-agents/<id>/data 的父目录 basename 是助理 id，不能用 basename 判断。"""
@@ -72,11 +77,11 @@ def main() -> int:
     globals()["ROOT_SRC"] = ROOT_SRC
     shutil.copytree(root, dest, ignore=ignore_for_instance)
 
-    # 重建空骨架：数据区/信箱/实例档案
+    # 重建空骨架：数据区/信箱/实例档案（骨架必须落在新实例存档，不碰框架仓存档）
     for agent in sorted(os.listdir(B.p(dest, "02-agents"))):
         adir = B.p(dest, "02-agents", agent)
         if os.path.isdir(adir) and os.path.isfile(B.p(adir, "manifest.json")):
-            B.ensure_agent_skeleton(adir)
+            B.ensure_agent_skeleton(adir, dest)
     B.atomic_write_json(B.p(dest, "01-master", "instance.json"),
                         {"name": args.name, "created_at": B.now_iso(), "forked_from": root})
     B.atomic_write_text(B.p(dest, "开始这里.md"), f"""# AgentCrew 个人实例（{args.name}）
@@ -120,14 +125,14 @@ def main() -> int:
             r_adopt = subprocess.run([sys.executable, B.p(dest, "05-scripts", "adopt.py"),
                                       "--path", adir],
                                      capture_output=True, text=True, encoding="utf-8", timeout=120)
-            if not os.path.isfile(B.p(dest, "01-master", "registry.json")):
+            if not registry_ready(dest):
                 print("警告：助理自动收编未完成，可手动跑实例内 adopt.py", file=sys.stderr)
 
     # 泄漏自检 1：新实例 01-master 下只允许模板/清单/personas
     allowed = {"profile.template.json", "registry.template.json", "onboarding-questions.md",
                "personas", "instance.json", ".gitkeep", "registry.json"}
     leaked = [n for n in os.listdir(B.p(dest, "01-master")) if n not in allowed]
-    reg_path = B.p(dest, "01-master", "registry.json")
+    reg_path = B.registry_path(dest)
     if os.path.isfile(reg_path):
         reg = json.load(open(reg_path, encoding="utf-8"))
         agent_ids = {a for a in os.listdir(B.p(dest, "02-agents"))}
@@ -170,7 +175,7 @@ def main() -> int:
         "next_steps": [
             "1. 双击实例目录下 04-panel/启动管家面板.bat（或在 IM 里直接跟总管说话）",
             "2. 完成初始化引导（聊天问答或面板表单，写 01-master/profile.json）",
-            "3. 01-master/registry.json 由 adopt.py 在收编时自动创建",
+            "3. 收编名册 registry.json 在实例存档 _save/master/ 下，由 adopt.py 收编时自动创建",
         ],
     })
 

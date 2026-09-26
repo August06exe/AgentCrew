@@ -61,10 +61,10 @@ def main() -> int:
         problems, warnings = B.validate_manifest(m, src)
         aid = m.get("id", "")
 
-        # PROTOCOL §5.1：data\ 缺失应补建而非拒收 → 先补骨架再校验工具
-        B.ensure_agent_skeleton(src)
-
-        # 校验清单（PROTOCOL §5.1 全 8 项）
+        # 校验清单（PROTOCOL §5.1 全 8 项）。
+        # 注意：此处不建任何存档骨架——zip/git 式 src 是临时目录，先建骨架会把
+        # 临时目录名写成实例存档切片（失败后残留 butler-adopt-xxxx 垃圾切片）。
+        # 骨架创建统一推迟到全部校验通过、最终 id 确定之后（见下 ensure_agent_skeleton）。
         checklist = {}
         checklist["s1_manifest"] = not problems
         charter_text = ""
@@ -135,41 +135,54 @@ def main() -> int:
 
         dest = B.p(root, "02-agents", aid)
         in_place = os.path.abspath(src) == os.path.abspath(dest)
-
-        # 存档并入：lite 期间攒的 <助理>/_save → 实例 _save/agents/<id>（数据随顾问入职）
-        lite_save = B.agent_save_dir_lite(src)
-        inst_save = B.agent_save_dir(root, aid)
-        merged_save = False
-        if os.path.isdir(lite_save) and any(os.scandir(lite_save)):
-            if os.path.exists(inst_save) and any(os.scandir(inst_save)):
-                return B.fail(f"存档冲突：实例已有 {aid} 的存档切片，且新顾问自带 _save——请先处理一处")
-            os.makedirs(os.path.dirname(inst_save), exist_ok=True)
-            shutil.move(lite_save, inst_save)
-            merged_save = True
         if os.path.exists(dest) and not in_place:
             return B.fail(f"id 冲突：02-agents/{aid} 已存在（升级请直接替换程序区，换 id 请改 manifest）")
 
-        # 拷贝程序区 + 信箱/数据骨架（已在收编区内的就地登记）
-        if not in_place:
-            shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "__pycache__", ".zcode"))
-        B.ensure_agent_skeleton(dest, root)
+        # 存档并入：lite 期间攒的 <助理>/_save → 实例 _save/agents/<id>（数据随顾问入职）。
+        # 切片名用真实 agent id；从建切片到登记全程可回滚——任何失败路径不留半成品切片。
+        lite_save = B.agent_save_dir_lite(src)
+        inst_save = B.agent_save_dir(root, aid)
+        slice_created = not os.path.isdir(inst_save)
+        dest_created = not in_place
+        merged_save = False
+        try:
+            if os.path.isdir(lite_save) and any(os.scandir(lite_save)):
+                if os.path.exists(inst_save) and any(os.scandir(inst_save)):
+                    return B.fail(f"存档冲突：实例已有 {aid} 的存档切片，且新顾问自带 _save——请先处理一处")
+                os.makedirs(os.path.dirname(inst_save), exist_ok=True)
+                shutil.move(lite_save, inst_save)
+                merged_save = True
 
-        # 建档：实例存档登记该顾问切片
-        B.ensure_save(root, [aid])
+            # 拷贝程序区 + 信箱/数据骨架（已在收编区内的就地登记）
+            if not in_place:
+                shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "__pycache__", ".zcode"))
+            B.ensure_agent_skeleton(dest, root)
 
-        # 登记（按 id 幂等：重复收编=更新原条目，绝不产生双条目）
-        reg = B.load_registry(root)
-        entry = {
-            "id": aid,
-            "dir": f"02-agents/{aid}",
-            "version": m.get("version"),
-            "status": "paused" if args.paused else "active",
-            "adopted_at": B.now_iso(),
-            "reminders_enabled": True,
-            "unverified": None if hard_ok else True,
-        }
-        others = [e for e in reg.get("adopted", []) if e.get("id") != aid]
-        B.save_registry(root, {**reg, "adopted": others + [entry]})
+            # 建档：实例存档登记该顾问切片
+            B.ensure_save(root, [aid])
+
+            # 登记（按 id 幂等：重复收编=更新原条目，绝不产生双条目）
+            reg = B.load_registry(root)
+            entry = {
+                "id": aid,
+                "dir": f"02-agents/{aid}",
+                "version": m.get("version"),
+                "status": "paused" if args.paused else "active",
+                "adopted_at": B.now_iso(),
+                "reminders_enabled": True,
+                "unverified": None if hard_ok else True,
+            }
+            others = [e for e in reg.get("adopted", []) if e.get("id") != aid]
+            B.save_registry(root, {**reg, "adopted": others + [entry]})
+        except Exception as e:  # noqa: BLE001  落库失败：回滚本次新建的切片，绝不丢随身档
+            if slice_created and os.path.isdir(inst_save):
+                if merged_save:
+                    shutil.move(inst_save, lite_save)  # 随身 _save 原样退回助理
+                else:
+                    shutil.rmtree(inst_save, ignore_errors=True)  # 仅骨架，直接拆除
+            if dest_created and os.path.isdir(dest):
+                shutil.rmtree(dest, ignore_errors=True)
+            return B.fail(f"收编落库失败（已回滚新建存档切片）：{e}", code=1)
 
         mode = B.detect_mode(dest)
         standalone_twin = os.path.isdir(B.p(root, "_standalone", aid))

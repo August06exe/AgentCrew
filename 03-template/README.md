@@ -13,6 +13,6 @@
 - `manifest.json` — 营业执照（字段说明见范式 §2）
 - `AGENTS.md` — 章程骨架（含双模式自查条款，范式 §3）
 - `persona.md` — 人设骨架
-- `tools/data.py` — 通用数据工具（append/query/stats/delete/serve/selfcheck，范式 §6）
+- `tools/data.py` — 通用数据工具（append/query/stats/delete/update/serve/selfcheck，范式 §6）
 - `dashboard/index.html` + `butler.css` — 看板骨架与统一皮肤 lite 回退拷贝（范式 §7）
 - `tests/smoke.py` — 最小冒烟（init/append/query/selfcheck）

@@ -276,14 +276,16 @@ function render(){
       `周均 蛋白${zhi(tp/intake.length)}g · 碳水${zhi(tc/intake.length)}g · 脂肪${zhi(tf/intake.length)}g（按有记录的 ${intake.length} 天平均）`;
   }
 
-  // —— 目标进度 ——
+  // —— 目标进度（速率型目标 daily/weekly 不算百分比，与 tools/daily.py goals 口径一致）——
   const goals=(D.tables.goals||[]).filter(g=>(g.status||'active')==='active');
   document.getElementById('goals').innerHTML = goals.length? goals.map(g=>{
+    const isRate = g.timeframe==='daily'||g.timeframe==='weekly';
     let pct=null;
-    if([g.start_value,g.target_value,g.current_value].every(v=>v!==undefined&&v!==null)&&g.start_value!==g.target_value)
+    if(!isRate && [g.start_value,g.target_value,g.current_value].every(v=>v!==undefined&&v!==null)&&g.start_value!==g.target_value)
       pct=Math.round(Math.max(0,Math.min(1,(g.current_value-g.start_value)/(g.target_value-g.start_value)))*100);
+    const pctTxt = pct===null ? (isRate?'按记录另计':'—') : pct+'%';
     return `<div class="goal"><div class="t"><span>${g.name}</span>
-      <span>${g.current_value??'—'} → ${g.target_value} ${g.unit||''} · ${pct===null?'—':pct+'%'}</span></div>
+      <span>${g.current_value??'—'} → ${g.target_value} ${g.unit||''} · ${pctTxt}</span></div>
       <div class="gbar"><span style="width:${pct||0}%"></span></div></div>`;
   }).join('') : '<span style="color:var(--muted);font-size:13px">暂无活跃目标</span>';
 

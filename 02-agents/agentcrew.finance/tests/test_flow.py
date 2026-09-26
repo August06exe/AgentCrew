@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 """理财助理全流程自测：开户 → 期初入账 → 收支/转账记账 → 余额与净资产 → 试算平衡 →
-余额断言（正/反例，反例断言 reason_code）→ 冲正后余额复原 → suggest 命中历史类别 →
-预算 set/check 超支 → 月度简报（含异常检测）→ 微信+支付宝账单 CSV 导入
-（dry-run/apply/重复导入幂等/双花对消/换旗重导幂等（对消留痕）/账单余额断言）→ 知识库词条查询。
+余额断言（正/反例，反例断言 reason_code）→ 冲正后余额复原（冲正单不可再冲正）→
+suggest 命中历史类别 → 预算 set/check 超支（微额拒收/坏行重写保留）→ 月度简报（含异常检测）→
+微信+支付宝账单 CSV 导入（dry-run/apply/重复导入幂等/双花对消/换旗重导幂等（对消留痕）/
+账单余额断言）→ 知识库词条查询 → 日期族回归（非补零写入归一化/assert 校验归一/
+历史坏行读取容错）、手记退款对消、已全额退款自动冲减、估值时点封顶。
 账目数字用固定历史月 2026-08（与"今天"解耦，任何 ≥2026-08-31 的日期重跑结果一致）。
-测试数据全落 tests/_sandbox，跑完清场，绝不触碰真实存档。"""
+测试数据全落 tests/_sandbox/run-<pid>（路径进程唯一），跑完清场，绝不触碰真实存档。"""
+import glob
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TOOLS = os.path.join(ROOT, "tools")
-SANDBOX = os.path.join(HERE, "_sandbox")
+# 沙箱基路径进程唯一（run-<pid> 后缀）：并发会话/多验收员同时跑本套件各用各的沙箱，
+# 互不踩踏——固定共享路径曾是联跑漂移失败根因：并发会话的清场 rmtree 删走本进程
+# 刚开的户，下一笔账即 known_accounts: []（与 06-tests/test_savepack 修复前同型）。
+SANDBOX = os.path.join(HERE, "_sandbox", f"run-{os.getpid()}")
 ENV = {**os.environ, "ASSISTANT_DATA_DIR": os.path.join(SANDBOX, "data"),
        "ASSISTANT_DASHBOARD_DIR": os.path.join(SANDBOX, "dashboard")}
 
@@ -88,8 +95,39 @@ def rec(d, f, t, amt, note=None):
     return run("ledger.py", *args)
 
 
+def sweep_stale_sandboxes():
+    """陈沙箱清扫（崩溃/强杀残留）：只收 6h 前的 run-*/——套件全程仅数分钟，
+    mtime 更新的必是活动会话的沙箱，绝不触碰（照 06-tests/test_savepack 同款纪律）。"""
+    cutoff = time.time() - 6 * 3600
+    for d in glob.glob(os.path.join(HERE, "_sandbox", "run-*")):
+        try:
+            if os.path.getmtime(d) < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def reset_sandbox():
+    """起跑显式重建沙箱（不依赖外部清场时序）：显式短重试删除本进程沙箱路径，
+    杀软/索引器占位导致的半途失败（ignore_errors 会把它静默成残留）当场抛错——
+    带着残留跑出假红，不如让套件明确失败。"""
+    for i in range(3):
+        try:
+            shutil.rmtree(SANDBOX)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if i == 2:
+                raise
+            time.sleep(0.3)
+
+
 def main() -> int:
-    shutil.rmtree(SANDBOX, ignore_errors=True)  # 每轮全量清场，测试可重复
+    # 回归断言：沙箱基路径必须进程唯一——回退成固定共享路径时在此当场翻红
+    assert os.path.basename(SANDBOX) == f"run-{os.getpid()}", SANDBOX
+    sweep_stale_sandboxes()
+    reset_sandbox()  # 每轮全量重建，测试可重复；不依赖外部清场时序
     run("data.py", "init")
 
     # ① 开户：先 dry-run 验证不落盘，再真开 10 户；重复开户须报 account_exists
@@ -123,6 +161,9 @@ def main() -> int:
     bad2 = run("ledger.py", "record", "--from", "微信零钱", "--to", "支出·餐饮",
                "--amount", "-5", "--date", "2026-08-04", expect="fail")
     assert not bad2.get("ok") and "error" in bad2, bad2
+    tiny1 = run("ledger.py", "record", "--from", "微信零钱", "--to", "支出·餐饮",
+                "--amount", "0.001", "--date", "2026-08-04", expect="fail")
+    assert tiny1["reason_code"] == "amount_too_small", tiny1  # D4：round 后为 0 的微额不得落库成幽灵流水
     for args in [
         ("2026-06-10", "微信零钱", "支出·购物", 25, "视频会员"),
         ("2026-07-01", "收入·工资", "储蓄卡", 15000, "7月工资"),
@@ -185,6 +226,10 @@ def main() -> int:
     assert ok_a2["matched"] is True, ok_a2
     again = run("ledger.py", "reverse", "--id", tid, expect="fail")
     assert again["reason_code"] == "already_reversed", again
+    q_rev = run("data.py", "query", "txns", "--where", f"note=冲正 {tid}")
+    assert q_rev["count"] == 1, q_rev
+    again2 = run("ledger.py", "reverse", "--id", q_rev["rows"][0]["_id"], expect="fail")
+    assert again2["reason_code"] == "already_reversed", again2  # D5：冲正单本身不可再冲正（等价复活原单）
 
     # ⑦ suggest 分类记忆建议：同备注历史 → 支出·餐饮/微信零钱；无历史 → no_history
     sg = run("ledger.py", "suggest", "--text", "瑞幸")
@@ -196,11 +241,19 @@ def main() -> int:
     sg2 = run("ledger.py", "suggest", "--text", "火星外卖", expect="fail")
     assert sg2["reason_code"] == "no_history", sg2
 
-    # ⑧ 预算：set（含 upsert 更新路径）→ check 超支
+    # ⑧ 预算：set（含 upsert 更新路径）→ check 超支；坏行须在 upsert 重写后原样保留（D7）
     b50 = run("budget.py", "set", "--month", MONTH, "--category", "支出·餐饮", "--amount", "50")
     assert b50["action"] == "created", b50
+    bud_path = os.path.join(SANDBOX, "data", "budgets.jsonl")
+    with open(bud_path, "a", encoding="utf-8") as f:
+        f.write("手改坏的预算行（非JSON）\n")  # _corrupt 坏行：重写整表时不得被吞掉
     b100 = run("budget.py", "set", "--month", MONTH, "--category", "支出·餐饮", "--amount", "100")
     assert b100["action"] == "updated" and b100["replaced"] == 1, b100
+    with open(bud_path, encoding="utf-8") as f:
+        assert "手改坏的预算行" in f.read(), "budget set upsert 重写吞掉了 _corrupt 坏行"
+    tiny2 = run("budget.py", "set", "--month", MONTH, "--category", "支出·交通",
+                "--amount", "0.001", expect="fail")
+    assert tiny2["reason_code"] == "amount_too_small", tiny2  # D4：先 round 再校验
     run("budget.py", "set", "--month", MONTH, "--category", "支出·交通", "--amount", "50")
     lb = run("budget.py", "list", "--month", MONTH)
     assert lb["count"] == 2, lb
@@ -326,9 +379,120 @@ def main() -> int:
     kf = run("kb.py", "term", "--name", "不存在的词条XYZ", expect="fail")
     assert kf["reason_code"] == "unknown_term", kf
 
+    # ⑫ 日期族回归（D1 三场景）+ 手记退款对消（D2）+ 已全额退款自动冲减（D3）+ 估值时点封顶（D6）
+    # a) 写入侧归一化：'2026-8-5' 落库成 2026-08-05，余额/按月聚合立即可见（不静默丢失）
+    rec("2026-8-5", "微信零钱", "支出·交通", 3, "补零归一")
+    qd = run("data.py", "query", "txns", "--where", "note=补零归一")
+    assert qd["count"] == 1 and qd["rows"][0]["date"] == "2026-08-05", qd
+    bal_d = run("ledger.py", "balance", "--account", "微信零钱")
+    assert almost(bal_d["account"]["balance"], 1627.88 - 3), bal_d
+    ck_d = run("budget.py", "check", "--month", "2026-08")
+    r_d = {r["category"]: r for r in ck_d["rows"]}
+    assert almost(r_d["支出·交通"]["spent"], 11), r_d["支出·交通"]  # 8 地铁 + 3 补零归一
+
+    # b) assert --date 归一化：'2026-8-31' ≡ 2026-08-31；垃圾日期拒收（原实现完全不校验）
+    ok_d = run("ledger.py", "assert", "--account", "微信零钱", "--balance", "1673",
+               "--date", "2026-8-31")
+    assert ok_d["matched"] is True and ok_d["as_of"] == "2026-08-31", ok_d
+    bad_d = run("ledger.py", "assert", "--account", "微信零钱", "--balance", "1",
+                "--date", "2026/8/31", expect="fail")
+    assert "date" in bad_d.get("error", ""), bad_d
+
+    # c) 读取侧容错：历史非补零坏行救回归聚与 as_of 推导；垃圾日期行进 suspects（malformed）
+    with open(os.path.join(SANDBOX, "data", "txns.jsonl"), "a", encoding="utf-8") as f:
+        for rid, d, amt, note in [("r-legacy-1", "2026-8-6", 5, "历史非补零行"),
+                                  ("r-legacy-2", "垃圾日期", 7, "历史垃圾行")]:
+            f.write(json.dumps({"date": d, "from_account": "微信零钱",
+                                "to_account": "支出·交通", "amount": amt, "note": note,
+                                "source": "record", "_id": rid,
+                                "created_at": "2026-09-26T00:00:00+08:00",
+                                "recorded_at": "2026-09-26"}, ensure_ascii=False) + "\n")
+    bal_c = run("ledger.py", "balance")  # 全账户表带 warnings（单账户模式无 warnings 键）
+    m_c = {i["name"]: i["balance"] for i in bal_c["balances"]}
+    assert almost(m_c["微信零钱"], 1619.88), bal_c  # 5 计入、垃圾行 7 剔除
+    assert bal_c["warnings"]["malformed_txns"] == 1, bal_c["warnings"]
+    tb_c = run("ledger.py", "trial-balance", expect="fail")  # 坏行进 suspects → 试算翻红（预期失败）
+    assert tb_c["balanced"] is False and len(tb_c["malformed"]) == 1, tb_c
+    ck_c = run("budget.py", "check", "--month", "2026-08")
+    r_c = {r["category"]: r for r in ck_c["rows"]}
+    assert almost(r_c["支出·交通"]["spent"], 16), r_c["支出·交通"]  # 8 + 3 + 5（'2026-8-6'→08-06）
+    ok_c = run("ledger.py", "assert", "--account", "微信零钱", "--balance", "2710",
+               "--date", "2026-08-04")  # as_of 封顶对宽容归一后的日期生效
+    assert ok_c["matched"] is True, ok_c
+
+    # d) D2：手记退款（支出科目→资金账户）与账单同笔退款对消 → cancelled=1, applied=0；
+    #    真实账户间转账（transfer）仍不对消退款，转账行照旧进手工清单
+    rec("2026-09-12", "支出·餐饮", "微信零钱", 12, "手记退款")
+    n_d2 = run("data.py", "query", "txns")["count"]
+    p_rb = os.path.join(bills, "refund_bill.csv")
+    with open(p_rb, "wb") as f:
+        f.write((
+            "微信支付账单明细,,,,,,,,,\n"
+            "交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注\n"
+            "2026-09-13 10:00:00,退款,瑞幸咖啡,生椰拿铁退款,/,¥12.00,零钱,已全额退款,WX9006,M9006,/\n"
+            "2026-09-20 09:00:00,转账,老赵,转账给老赵,支出,¥12.00,零钱,对方已收钱,WX9007,M9007,/\n"
+        ).encode("utf-8"))
+    rep_d2 = run("import_bills.py", p_rb, "--match-existing", "--apply",
+                 "--map", "零钱=微信零钱", "--account", "微信零钱",
+                 "--expense-category", "支出·餐饮")
+    t_d2 = rep_d2["totals"]
+    assert t_d2["cancelled"] == 1 and t_d2["applied"] == 0 and t_d2["manual"] == 1, t_d2
+    assert rep_d2["cancellations"][0]["matched"]["source"] == "ledger", rep_d2["cancellations"]
+    assert run("data.py", "query", "txns")["count"] == n_d2, "手记退款对消不得改变流水数"
+
+    # e) D3：原支出行状态含「已全额退款」→ dry-run 预览冲减分录；apply 落库原单+冲减两笔，
+    #    冲减 note 标注自动冲减并关联原行；重导凭 dedup 跳过，不再生成第二笔冲减
+    p_fr = os.path.join(bills, "full_refund_bill.csv")
+    with open(p_fr, "wb") as f:
+        f.write((
+            "微信支付账单明细,,,,,,,,,\n"
+            "交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注\n"
+            "2026-09-22 09:00:00,商户消费,某店,某商品,支出,¥20.00,零钱,已全额退款,WX9008,M9008,/\n"
+        ).encode("utf-8"))
+    rep_e0 = run("import_bills.py", p_fr, "--map", "零钱=微信零钱",
+                 "--expense-category", "支出·餐饮")
+    pv_e = rep_e0["pending"][0]
+    wr_e = pv_e.get("would_record_refund") or {}
+    assert wr_e.get("from_account") == "支出·餐饮" and wr_e.get("to_account") == "微信零钱" \
+        and almost(wr_e.get("amount"), 20), pv_e
+    n_e = run("data.py", "query", "txns")["count"]
+    rep_e = run("import_bills.py", p_fr, "--apply", "--map", "零钱=微信零钱",
+                "--expense-category", "支出·餐饮")
+    assert rep_e["totals"]["applied"] == 2 and rep_e["totals"]["failed"] == 0, rep_e["totals"]
+    assert any(a.get("auto_refund") for a in rep_e["applied"]), rep_e["applied"]
+    assert run("data.py", "query", "txns")["count"] == n_e + 2, "应落库原单+自动冲减共 2 笔"
+    q_o = run("data.py", "query", "txns", "--where", "note=某店｜某商品｜已退款")
+    assert q_o["count"] == 1 and almost(q_o["rows"][0]["amount"], 20), q_o
+    oid = q_o["rows"][0]["_id"]
+    q_r = run("data.py", "query", "txns",
+              "--where", f"note=自动冲减：某店｜某商品｜已退款（关联原行 {oid}）")
+    assert q_r["count"] == 1 and q_r["rows"][0]["from_account"] == "支出·餐饮" \
+        and q_r["rows"][0]["to_account"] == "微信零钱", q_r
+    rep_e2 = run("import_bills.py", p_fr, "--apply", "--map", "零钱=微信零钱",
+                 "--expense-category", "支出·餐饮")
+    assert rep_e2["totals"]["applied"] == 0 and rep_e2["totals"]["duplicates"] == 1, rep_e2["totals"]
+    assert run("data.py", "query", "txns")["count"] == n_e + 2, "重导不得再生成第二笔冲减"
+
+    # f) D6：未来日期的估值快照不得被 net-worth/看板采信（与月报 _valuation_upto 封顶口径对齐）
+    run("data.py", "append", "valuations", "--json",
+        json.dumps({"account": "微信零钱", "date": "2099-01-01", "value": 999999}, ensure_ascii=False))
+    run("data.py", "append", "valuations", "--json",
+        json.dumps({"account": "支付宝余额", "date": "2026-08-15", "value": 600}, ensure_ascii=False))
+    nw_f = run("ledger.py", "net-worth")
+    amap = {a["name"]: a for a in nw_f["assets"]}
+    assert amap["微信零钱"]["value_source"] == "ledger", amap["微信零钱"]  # 未来估值不采信
+    assert amap["支付宝余额"]["value_source"] == "valuation" \
+        and almost(amap["支付宝余额"]["value"], 600), amap["支付宝余额"]  # 过去估值照常采信
+    run("data.py", "serve")
+    dash = json.load(open(os.path.join(SANDBOX, "dashboard", "data.json"), encoding="utf-8"))
+    fmap = {a["name"]: a for a in dash["finance"]["net_worth"]["assets"]}
+    assert fmap["微信零钱"]["value_source"] == "ledger", fmap["微信零钱"]
+    assert almost(fmap["支付宝余额"]["value"], 600), fmap["支付宝余额"]
+
     shutil.rmtree(SANDBOX, ignore_errors=True)  # 恢复现场
-    print("FINANCE FLOW OK（开户/期初/复式记账/净资产/试算/断言正反例/冲正复原/记忆建议/"
-          "预算超支/月报异常检测/双账单导入幂等与双花对消/知识库 全过）")
+    print("FINANCE FLOW OK（开户/期初/复式记账/净资产/试算/断言正反例/冲正复原与冲正单守卫/记忆建议/"
+          "预算超支与微额拒收与坏行保留/月报异常检测/双账单导入幂等与双花对消/知识库/"
+          "日期族归一与容错/手记退款对消/已全额退款自动冲减/估值时点封顶 全过）")
     return 0
 
 

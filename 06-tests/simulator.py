@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from datetime import date
 
@@ -27,7 +28,7 @@ def check(cond: bool, label: str) -> None:
     print(f" {PASS if cond else FAIL} {label}")
 
 
-SANDBOX = os.path.join(HERE, "_sandbox")
+SANDBOX = os.path.join(HERE, "_sandbox", "simulator")  # 数据落自己的子目录，跑完整体拆除
 
 
 def run_tool(adir: str, rel: str, *args):
@@ -174,6 +175,7 @@ def main() -> int:
     B.utf8_console()
     print("# 联邦协议全链路模拟\n")
 
+    shutil.rmtree(SANDBOX, ignore_errors=True)  # 起跑先拆旧沙箱：数据目录全新
     reg = B.load_registry(ROOT)
     agents = []
     for e in reg.get("adopted", []):
@@ -230,15 +232,11 @@ def main() -> int:
     check(B.detect_mode(ROOT)["mode"] == "lite", "总管仓库根自身=lite（无上级总管）")
 
     bad = [label for okk, label in results if not okk]
-    print(f"\n# 结果：{len(results) - len(bad)}/{len(results)} 通过")
     try:
-        if bad:
-            for b in bad:
-                print(f"  失败：{b}")
-            print("# 存在失败项")
-            return 1
+        pass  # 清场必须在 finally：失败路径也要拆沙箱
     finally:
-        # 清场：本次模拟创建的信箱产物全部移除（真实信箱不被测试流量污染）
+        # 清场：本次模拟创建的信箱产物全部移除（真实信箱不被测试流量污染）；
+        # 沙箱数据落在自己的子目录（06-tests/_sandbox/simulator），跑完整体拆除无残留
         removed = 0
         for p in CREATED:
             try:
@@ -246,7 +244,17 @@ def main() -> int:
                 removed += 1
             except OSError:
                 pass
-        print(f"# 信箱清场：移除测试产物 {removed} 项")
+        shutil.rmtree(SANDBOX, ignore_errors=True)
+        sandbox_clean = not os.path.exists(SANDBOX)
+        results.append((sandbox_clean, "沙箱数据清场：跑完 _sandbox/simulator 无残留"))
+        print(f"# 信箱清场：移除测试产物 {removed} 项；沙箱数据清场：{'完成' if sandbox_clean else '失败'}")
+    bad = [label for okk, label in results if not okk]
+    print(f"\n# 结果：{len(results) - len(bad)}/{len(results)} 通过")
+    if bad:
+        for b in bad:
+            print(f"  失败：{b}")
+        print("# 存在失败项")
+        return 1
     print("# 全链路（路由→交办→执行→回执→收取→归档）全部通过")
     return 0
 

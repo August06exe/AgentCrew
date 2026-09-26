@@ -79,9 +79,13 @@ def net_worth_at(accounts: list[dict], txns: list[dict], valuations: list[dict],
 
 def top_expenses(txns: list[dict], accounts: list[dict], mkey: str, n: int = 5) -> list[dict]:
     tmap = {a.get("name"): a.get("type") for a in accounts}
-    cand = [t for t in txns
-            if str(t.get("date", ""))[:7] == mkey
-            and tmap.get(t.get("to_account")) == "expense" and _is_num(t.get("amount"))]
+    cand = []
+    for t in txns:
+        nd = D.norm_date(t.get("date"))  # 宽容归一（D1③）：非补零日期照常入榜，垃圾日期不静默消失
+        if nd is None or nd[:7] != mkey:
+            continue
+        if tmap.get(t.get("to_account")) == "expense" and _is_num(t.get("amount")):
+            cand.append({**t, "date": nd})
     cand.sort(key=lambda t: (-float(t["amount"]), str(t.get("date", ""))))
     return [{"date": t.get("date"), "amount": round(float(t["amount"]), 2),
              "category": t.get("to_account"), "account": t.get("from_account"),
@@ -95,11 +99,12 @@ def find_duplicate_charges(txns: list[dict], accounts: list[dict], mkey: str) ->
     tmap = {a.get("name"): a.get("type") for a in accounts}
     groups: dict[tuple, list[dict]] = {}
     for t in txns:
-        if str(t.get("date", ""))[:7] != mkey or tmap.get(t.get("to_account")) != "expense":
+        nd = D.norm_date(t.get("date"))  # 宽容归一（D1③），与月聚合口径一致
+        if nd is None or nd[:7] != mkey or tmap.get(t.get("to_account")) != "expense":
             continue
         if not _is_num(t.get("amount")):
             continue
-        groups.setdefault((str(t.get("date", "")), round(float(t["amount"]), 2)), []).append(t)
+        groups.setdefault((nd, round(float(t["amount"]), 2)), []).append(t)
     hits = [{"date": d, "amount": amt, "count": len(items),
              "occurrences": [{"category": t.get("to_account"),
                               "account": t.get("from_account"), "note": t.get("note"),
@@ -139,7 +144,8 @@ def find_subscriptions(txns: list[dict], accounts: list[dict], mkey: str,
     tmap = {a.get("name"): a.get("type") for a in accounts}
     groups: dict[tuple, dict[str, int]] = {}
     for t in txns:
-        mk = str(t.get("date", ""))[:7]
+        nd = D.norm_date(t.get("date"))  # 宽容归一（D1③），与月聚合口径一致
+        mk = nd[:7] if nd else None
         if mk not in mlist or tmap.get(t.get("to_account")) != "expense":
             continue
         note = str(t.get("note") or "").strip().lower()
@@ -482,6 +488,19 @@ def cmd_selfcheck(_a) -> int:
     if pv["net_worth"]["end"] != 11800.0 or pv["net_worth"]["start"] != 5650.0:
         problems.append(f"估值快照口径不对：{pv['net_worth']['start']}/{pv['net_worth']['end']}"
                         "（月末应用 12000−200=11800，月初不受未来估值影响）")
+    # 日期容错（D1 回归）：非补零日期行照常入 Top 开销/月报，垃圾日期行不静默计入
+    T_d = T + [{"_id": "13", "date": "2020-8-6", "from_account": "钱包",
+                "to_account": "支出·餐饮", "amount": 88, "note": "补零回归"},
+               {"_id": "14", "date": "垃圾", "from_account": "钱包",
+                "to_account": "支出·餐饮", "amount": 66, "note": "垃圾行"}]
+    te = top_expenses(T_d, accts, "2020-08", 5)
+    if te[0]["amount"] != 900.0 or not any(x["amount"] == 88.0 for x in te):
+        problems.append(f"top_expenses 未宽容归一非补零日期：{te[:2]}")
+    p_d = build_report(accts, T_d, budgets, [], "2020-08", "2020-09-25T08:30:00+08:00", {})
+    dup_d = p_d["anomalies"]["duplicate_charges"]["items"]
+    if p_d["expense_total"] != 1277.0 or len(dup_d) != 1 or dup_d[0]["count"] != 2 \
+            or p_d["top_expenses"][0]["date"] != "2020-08-02":
+        problems.append(f"月报对非补零/垃圾日期行处理不对：{p_d['expense_total']}/{dup_d}")
     # 空账本不炸、markdown 完整
     empty = build_report([], [], [], [], "2020-08", "2020-09-25T08:30:00+08:00", {})
     if empty["income_total"] != 0 or empty["top_expenses"]:

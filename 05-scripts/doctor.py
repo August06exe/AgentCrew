@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -99,7 +101,7 @@ def main() -> int:
         elif v < B.SAVE_VERSION_CURRENT:
             add(WARN, "save", f"存档版本 {v} 旧于程序 {B.SAVE_VERSION_CURRENT}（跑 migrate_save.py 升档）")
         # 3) 孤儿档切片
-        sr_agents = p(B.save_root(root), "agents") if False else B.p(B.save_root(root), "agents")
+        sr_agents = B.p(B.save_root(root), "agents")
         if os.path.isdir(sr_agents):
             for aid in os.listdir(sr_agents):
                 if os.path.isdir(B.p(sr_agents, aid)) and not os.path.isdir(B.p(root, "02-agents", aid)):
@@ -175,10 +177,21 @@ def check_agent(adir: str, m: dict, args, add, root: str = '.', new_game: bool =
     if m.get("dashboard", {}).get("up") and not os.path.isfile(B.p(adir, m["dashboard"]["main"])):
         add(ERROR, aid, "声明 dashboard.up 但看板文件缺失")
     if not args.no_selfcheck:
-        for tool in m.get("tools") or ["tools/data.py"]:
-            good, msg = B.selfcheck_tool(adir, tool)
-            if not good:
-                add(ERROR, aid, f"工具自检失败 {tool}: {msg}")
+        # selfcheck 子进程可能写档（如 fitness daily.py rebuild 会重写 daily_records 的
+        # created_at）——注入沙箱 env（06-tests/_sandbox 下临时目录，用后清场），体检从此不碰真实档。
+        sb_base = B.p(B.find_repo_root() or root, "06-tests", "_sandbox", "doctor-selfcheck")
+        sb_root = B.p(sb_base, aid)
+        sb_env = {"AGENTCREW_SAVE": sb_root, "ASSISTANT_DATA_DIR": B.p(sb_root, "data")}
+        os.makedirs(B.p(sb_root, "data"), exist_ok=True)
+        try:
+            for tool in m.get("tools") or ["tools/data.py"]:
+                good, msg = B.selfcheck_tool(adir, tool, env_extra=sb_env)
+                if not good:
+                    add(ERROR, aid, f"工具自检失败 {tool}: {msg}")
+        finally:
+            shutil.rmtree(sb_root, ignore_errors=True)
+            with contextlib.suppress(OSError):
+                os.rmdir(sb_base)  # 最后一个助理清场后连沙箱父目录一并拆除
 
 
 if __name__ == "__main__":

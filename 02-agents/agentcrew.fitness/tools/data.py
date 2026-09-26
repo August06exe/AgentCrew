@@ -17,15 +17,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 # 模板/实例中 tools/ 与仓库 05-scripts 的 agentcrew_lib 二选一：优先用自带轻量实现，保证自包含。
 # 这里刻意不 import agentcrew_lib：助理必须能被整包拷走独立运行（范式公理1）。
-
-TABLE_SCHEMA_EXCLUDE = {"_id", "created_at", "recorded_at"}
 
 
 def jout(obj: dict, code: int = 0) -> int:
@@ -143,7 +140,7 @@ def check_value(col: dict, value, where: str) -> str | None:
         return None if not col.get("required") else f"{where}: 必填字段 {name} 缺失"
     if t == "number" and not isinstance(value, (int, float)) or isinstance(value, bool) and t == "number":
         return f"{where}: {name} 应为 number"
-    if t == "integer" and not isinstance(value, int):
+    if t == "integer" and not isinstance(value, int) or isinstance(value, bool) and t == "integer":
         return f"{where}: {name} 应为 integer"
     if t == "boolean" and not isinstance(value, bool):
         return f"{where}: {name} 应为 boolean"

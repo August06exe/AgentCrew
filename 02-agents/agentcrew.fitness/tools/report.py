@@ -44,19 +44,19 @@ def cmd_weekly(a) -> int:
                   if not g.get("_corrupt") and g.get("status", "active") == "active"]
     # 目标进度（P3-7）：体重类目标按最新体重算完成百分比
     goals_progress = []
-    _body = F.read_rows("body_stats")
-    _weight = None
-    for r in _body:
-        if r.get("weight_kg") is not None:
-            _weight = float(r["weight_kg"])  # 行序即时间序，取最后一条
+    # 按 recorded_at 取最新体重（与 daily.py latest_weight_before 同口径；行序≠时间序，补录旧体重会取错）
+    _weight, _ = D.latest_weight_before(F.read_rows("body_stats"), date.today())
     for g in goals_rows:
+        is_rate = g.get("timeframe") in ("daily", "weekly")
         pct = None
         start, target = g.get("start_value"), g.get("target_value")
-        current = _weight if g.get("metric") == "weight_kg" and _weight else g.get("current_value")
-        if None not in (start, target, current) and start != target:
+        current = (_weight if g.get("metric") == "weight_kg" and _weight and not is_rate
+                   else g.get("current_value"))
+        if not is_rate and None not in (start, target, current) and start != target:
             pct = round(max(0.0, min(1.0, (current - start) / (target - start))) * 100)
         goals_progress.append({"name": g.get("name"), "current": current,
-                               "target": target, "progress_pct": pct})
+                               "target": target, "progress_pct": pct,
+                               "progress_note": "按记录另计" if is_rate else None})
 
     summary = {
         "week": f"{mon.isocalendar().year}-W{mon.isocalendar().week:02d}",
@@ -75,9 +75,12 @@ def cmd_weekly(a) -> int:
     }
     summary["user_view"] = _line(summary)
     if goals_progress:
-        gp = "；".join(f"{g['name']}{g['progress_pct']}%" for g in goals_progress if g["progress_pct"] is not None)
-        if gp:
-            summary["user_view"] = summary["user_view"] + " 目标进度：" + gp + "。"
+        # 速率型目标（daily/weekly）不显示百分比，与 daily.py goals 口径逐字一致（PENDING #14）
+        parts = [f"{g['name']}{g['progress_pct']}%" for g in goals_progress if g["progress_pct"] is not None]
+        parts += [f"{g['name']}（{g['progress_note']}）" for g in goals_progress
+                  if g["progress_pct"] is None and g.get("progress_note")]
+        if parts:
+            summary["user_view"] = summary["user_view"] + " 目标进度：" + "；".join(parts) + "。"
     path = os.path.join(F.data_dir(), "reports", f"weekly-{summary['week']}.json")
     F.atomic_json(path, summary)
     return F.jout({"ok": True, **summary, "report_file": os.path.relpath(path, F.root()),

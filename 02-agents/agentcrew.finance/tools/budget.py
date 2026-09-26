@@ -57,13 +57,16 @@ def load_budgets() -> list[dict]:
 
 
 def month_net_by_account(txns: list[dict], mkey: str) -> dict[str, float]:
-    """某月每个账户的净流入（流入 − 流出）；坏行（金额非数值/缺方向）跳过。
+    """某月每个账户的净流入（流入 − 流出）；坏行（金额非数值/缺方向/日期不可解析）跳过。
 
     纯函数：selfcheck 用它验数学。支出科目净流入=净花费，收入科目取负即净收入。
+    日期经 D.norm_date 宽容归一：历史非补零行（如 '2026-8-5'）照常计入当月，
+    不在聚合中静默消失（与 ledger.month_net_agg 同滤，D1③）。
     """
     nets: dict[str, float] = {}
     for t in txns:
-        if str(t.get("date", ""))[:7] != mkey:
+        nd = D.norm_date(t.get("date"))
+        if nd is None or nd[:7] != mkey:
             continue
         f, to, amt = t.get("from_account"), t.get("to_account"), t.get("amount")
         if not isinstance(amt, (int, float)) or isinstance(amt, bool) or not f or not to:
@@ -150,9 +153,13 @@ def cmd_set(a) -> int:
         month = parse_month(a.month)
     except ValueError:
         return D.jfail(f"--month 应为 YYYY-MM，现在是 {a.month!r}")
-    if not isinstance(a.amount, (int, float)) or a.amount <= 0:
-        return D.jfail(f"--amount 必须为正数，现在是 {a.amount!r}")
+    if not isinstance(a.amount, (int, float)) or isinstance(a.amount, bool):
+        return D.jfail(f"--amount 必须为数值，现在是 {a.amount!r}")
     amount = round(float(a.amount), 2)
+    if amount <= 0:  # 先 round 再校验：0.001 round 到分为 0 会落成幽灵预算（D4，与 ledger.record 同口径）
+        return D.jout({"ok": False, "reason_code": "amount_too_small",
+                       "error": f"--amount 必须为正数；{a.amount!r} 四舍五入到分为 {amount}，拒绝落库"},
+                      code=1)
     category = (a.category or "").strip()
     if not category:
         return D.jfail("--category 不能为空")
@@ -163,7 +170,10 @@ def cmd_set(a) -> int:
                        "known_expense_categories": _expense_categories(accounts),
                        "hint": "预算类别须先经 ledger.py accounts add --type expense 开科目；"
                                "命名习惯如 支出·餐饮"})
-    rows = load_budgets()
+    # 未过滤读取参与重写：upsert 重写整表时 _corrupt 坏行原样保留（D7，与 data.py delete/update 口径一致），
+    # 判定 upsert 命中仍用过滤后的合法行（坏行无 month/category，本就不参与）
+    rows_raw = D.read_rows(D.table_path("budgets"))
+    rows = [r for r in rows_raw if not r.get("_corrupt")]
     old = [r for r in rows if r.get("month") == month and r.get("category") == category]
     row = {"month": month, "category": category, "amount": amount,
            "_id": D.row_id(), "created_at": D.now_iso(), "recorded_at": D.now_iso()[:10]}
@@ -171,12 +181,12 @@ def cmd_set(a) -> int:
     if a.dry_run:
         return D.jout({"ok": True, "dry_run": True, "action": action,
                        "would_write": row, "replaced": len(old)})
-    if old:  # upsert：旧行先移 trash（可人工恢复），再写新行
+    if old:  # upsert：旧行先移 trash（可人工恢复），再写新行；坏行原样保留（D7）
         trash = os.path.join(D.data_dir(), "trash", f"budgets-{datetime.now():%Y%m%d}.jsonl")
         for r in old:
             r["_superseded_at"] = D.now_iso()
             D.append_row(trash, r)
-        keep = [r for r in rows if not (r.get("month") == month and r.get("category") == category)]
+        keep = [r for r in rows_raw if not (r.get("month") == month and r.get("category") == category)]
         keep.append(row)
         D.atomic_write(D.table_path("budgets"),
                        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in keep))
@@ -256,6 +266,15 @@ def cmd_selfcheck(_a) -> int:
     ex3 = compute_execution(accts, txns9, budgets, "2026-09")
     if [r["category"] for r in ex3["rows"]] != ["支出·餐饮"] or ex3["rows"][0]["budgeted"]:
         problems.append(f"9月无预算但餐饮有花费，应出 unbudgeted 行：{ex3['rows']}")
+    # 2b) 日期容错（D1 回归）：非补零日期行归一计入当月，垃圾日期行不静默计数
+    nets_d = month_net_by_account(
+        txns + [{"_id": "8", "date": "2026-8-11", "from_account": "钱包",
+                 "to_account": "支出·餐饮", "amount": 7},
+                {"_id": "9", "date": "垃圾", "from_account": "钱包",
+                 "to_account": "支出·餐饮", "amount": 9}], "2026-08")
+    if abs(nets_d.get("支出·餐饮", 0.0) - 507.0) > EPS or abs(nets_d.get("钱包", 0.0) - 93.0) > EPS:
+        problems.append(f"month_net_by_account 未宽容归一非补零日期/未剔除垃圾日期：{nets_d}")
+
     # 3) 月份工具
     if (prev_month("2026-01"), prev_month("2026-09"), month_last_day("2026-02")) != \
             ("2025-12", "2026-08", "2026-02-28"):

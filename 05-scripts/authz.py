@@ -45,14 +45,16 @@ def cmd_sweep(root: str, _args) -> int:
                 except (TypeError, ValueError):
                     expired = False
                 if expired:
-                    trash = B.p(agdir, d, "data", "trash", "expired-snapshots.jsonl")
+                    # 回收站落存档切片（写程序区 data\ 会触发 save.py watch 违规）
+                    trash = B.p(B.resolve_agent_save(B.p(agdir, d)),
+                                "data", "trash", "expired-snapshots.jsonl")
                     rec = dict(snap)
                     rec["_swept_at"] = B.now_iso()
                     B.append_jsonl(trash, rec)
                     os.remove(fp)
                     swept.append({"agent": d, "snapshot_id": snap.get("snapshot_id")})
-    # 总管本人的信箱也要扫
-    master_inbox = B.p(root, "01-master", "inbox-master")
+    # 总管本人的信箱也要扫（快照实际投在存档信箱，程序区 01-master 已无此目录）
+    master_inbox = B.master_save_files(root)["inbox_master"]
     if os.path.isdir(master_inbox):
         for fname in sorted(os.listdir(master_inbox)):
             if not fname.startswith("snapshot-") or not fname.endswith(".json"):
@@ -103,7 +105,9 @@ def main() -> int:
     src_dir = agent_dir_of(root, reg, args.src)
     if not src_dir:
         return B.fail(f"源助理不存在：{args.src}")
-    table_file = B.p(src_dir, "data", f"{args.table}.jsonl")
+    # 存档架构：表在存档切片（托管=实例 _save/agents/<id>/data；lite=助理自带 _save/data），
+    # 程序区 data\ 已无数据（v0 位置读取永远落空）
+    table_file = B.p(B.resolve_agent_save(src_dir), "data", f"{args.table}.jsonl")
     if not os.path.isfile(table_file):
         return B.fail(f"源助理没有这张表：{args.src}/data/{args.table}.jsonl")
 

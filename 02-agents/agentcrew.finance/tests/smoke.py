@@ -4,20 +4,23 @@ init → append(dry-run) → append → query → stats → serve → 六工具�
 与模板的两处差异：
   * fake_value 支持 enum 列（finance 首表 accounts.type 是枚举，照抄模板必挂 schema）；
   * serve 断言追加"财计算段"（data.py serve 的理财扩展载荷）。
-测试数据全落 tests/_sandbox（ASSISTANT_DATA_DIR 沙箱），首尾各清一次场，绝不触碰真实存档。
+测试数据全落 tests/_sandbox/run-<pid>（路径进程唯一，并发会话互不踩踏——固定共享路径
+曾是并发互踩根因，与 06-tests/test_savepack 修复前同型），首尾各清一次场，绝不触碰真实存档。
 """
+import glob
 import json
 import os
 import random
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TOOLS = os.path.join(ROOT, "tools")
-SANDBOX = os.path.join(HERE, "_sandbox")
+SANDBOX = os.path.join(HERE, "_sandbox", f"run-{os.getpid()}")
 ENV = {**os.environ,
        "ASSISTANT_DATA_DIR": os.path.join(SANDBOX, "data"),
        "ASSISTANT_DASHBOARD_DIR": os.path.join(SANDBOX, "dashboard")}
@@ -61,8 +64,38 @@ def fake_row(table):
     return row
 
 
+def sweep_stale_sandboxes():
+    """陈沙箱清扫（崩溃/强杀残留）：只收 6h 前的 run-*/——套件全程仅数分钟，
+    mtime 更新的必是活动会话的沙箱，绝不触碰（照 06-tests/test_savepack 同款纪律）。"""
+    cutoff = time.time() - 6 * 3600
+    for d in glob.glob(os.path.join(HERE, "_sandbox", "run-*")):
+        try:
+            if os.path.getmtime(d) < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def reset_sandbox():
+    """起跑显式重建沙箱（不依赖外部清场时序）：显式短重试删除本进程沙箱路径，
+    半途失败（ignore_errors 会把杀软/索引器占位静默成残留）当场抛错。"""
+    for i in range(3):
+        try:
+            shutil.rmtree(SANDBOX)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if i == 2:
+                raise
+            time.sleep(0.3)
+
+
 def main() -> int:
-    shutil.rmtree(SANDBOX, ignore_errors=True)  # 每轮清场
+    # 回归断言：沙箱基路径必须进程唯一——回退成固定共享路径时在此当场翻红
+    assert os.path.basename(SANDBOX) == f"run-{os.getpid()}", SANDBOX
+    sweep_stale_sandboxes()
+    reset_sandbox()  # 每轮清场；不依赖外部清场时序
     manifest = json.load(open(os.path.join(ROOT, "manifest.json"), encoding="utf-8"))
     tables = manifest.get("tables") or []
     if not tables:

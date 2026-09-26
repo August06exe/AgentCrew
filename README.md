@@ -124,7 +124,7 @@ python 05-scripts/doctor.py        # 体检：环境就绪检查
 
 **方式 B · 接入你的运行时（IM 日常使用）**
 
-把本文件夹指给 OpenClaw / Hermes / zcode 的工作区——总管会主动发起**两轮初始化**（称呼与风格 → 推送时段与顾问启用），完成后正式上岗。Hermes 用户见 [docs/DEPLOY-hermes.md](docs/DEPLOY-hermes.md)。
+把本文件夹指给 OpenClaw / Hermes / zcode 的工作区——总管会主动发起**两轮初始化**（称呼与风格 → 推送时段与顾问启用），完成后正式上岗。Hermes 用户见 [00-docs/DEPLOY-hermes.md](00-docs/DEPLOY-hermes.md)。
 
 **然后，像给朋友发消息一样用它：**
 

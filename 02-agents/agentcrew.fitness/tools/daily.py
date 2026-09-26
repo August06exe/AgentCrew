@@ -150,11 +150,6 @@ def rebuild() -> dict:
                     "rebuilt_at": F.now_iso(),
                     "rebuilt_from": ["body_stats", "diet_logs", "workouts", "sleep_records", "config"]}]
                   + rows)
-    if cfg.get("last_weight_kg") is None:
-        lw, _ = latest_weight_before(body, date.today())
-        if lw:
-            cfg["last_weight_kg"] = lw
-            F.save_config(cfg)
     return {"days": len(rows), "have_body_config": have_body}
 
 
@@ -270,7 +265,10 @@ def cmd_goals(_a) -> int:
     out = []
     changed = False
     for g in active:
-        if g.get("metric") == "weight_kg" and weight:
+        is_rate = g.get("timeframe") in ("daily", "weekly")
+        # 速率型目标的 current 不随体重推进：覆写会把"每周减0.57kg"持久化成绝对体重，
+        # 语义被破坏（PENDING #14，口径说明见下）
+        if g.get("metric") == "weight_kg" and weight and not is_rate:
             if g.get("current_value") != weight:
                 g["current_value"] = weight
                 changed = True
@@ -288,7 +286,6 @@ def cmd_goals(_a) -> int:
         # 的百分比是"挤压计算"，不构成达成事实——达成要主人亲口说（PENDING #14）
         # 速率型目标（daily/weekly，如"每周减重0.57kg/周"）的 current 不随体重推进，
         # 挤压出的百分比是假的——如实标"按记录另计"，且永不自动判达成（PENDING #14）
-        is_rate = g.get("timeframe") in ("daily", "weekly")
         if is_rate:
             pct = None
         achieved = pct is not None and pct >= 100

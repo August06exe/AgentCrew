@@ -12,10 +12,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TOOL = os.path.join(ROOT, "tools", "data.py")
 
+SANDBOX = os.path.join(HERE, "_sandbox")
+ENV = {**os.environ,
+       "ASSISTANT_DATA_DIR": os.path.join(SANDBOX, "data"),
+       "ASSISTANT_DASHBOARD_DIR": os.path.join(SANDBOX, "dashboard")}
+
 
 def run(*args, expect_ok=True):
     r = subprocess.run([sys.executable, TOOL, *args], capture_output=True, text=True,
-                       encoding="utf-8", cwd=ROOT)
+                       encoding="utf-8", cwd=ROOT, env=ENV)
     out = {}
     try:
         out = json.loads(r.stdout)
@@ -27,6 +32,8 @@ def run(*args, expect_ok=True):
 
 
 def fake_value(col):
+    if col.get("enum"):
+        return random.choice(col["enum"])
     t = col.get("type", "string")
     if t == "number":
         return round(random.uniform(1, 99), 1)
@@ -48,6 +55,8 @@ def fake_row(table):
 
 
 def main() -> int:
+    import shutil
+    shutil.rmtree(SANDBOX, ignore_errors=True)  # 每轮清场
     manifest = json.load(open(os.path.join(ROOT, "manifest.json"), encoding="utf-8"))
     tables = manifest.get("tables") or []
     if not tables:
@@ -71,12 +80,12 @@ def main() -> int:
     assert q["count"] >= 2, "应有至少两行"
     run("stats", tname)
     run("serve")
-    assert os.path.isfile(os.path.join(ROOT, "dashboard", "data.js")), "serve 应产出 data.js"
+    assert os.path.isfile(os.path.join(SANDBOX, "dashboard", "data.js")), "serve 应产出 data.js（存档沙箱）"
     run("selfcheck")
     rid = r1.get("appended")
     if rid:
         run("delete", tname, "--id", rid, "--yes")
-    print(f"SMOKE OK（表 {tname}，含必填校验/查询/统计/看板/自检/删除）")
+    print(f"SMOKE OK（表 {tname}，含必填/enum 校验/查询/统计/看板/自检/删除）")
     return 0
 
 

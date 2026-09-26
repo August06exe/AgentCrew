@@ -23,15 +23,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 # 模板/实例中 tools/ 与仓库 05-scripts 的 agentcrew_lib 二选一：优先用自带轻量实现，保证自包含。
 # 这里刻意不 import agentcrew_lib：助理必须能被整包拷走独立运行（范式公理1）。
-
-TABLE_SCHEMA_EXCLUDE = {"_id", "created_at", "recorded_at"}
 
 
 def jout(obj: dict, code: int = 0) -> int:
@@ -113,6 +110,19 @@ def row_id() -> str:
     return f"r-{datetime.now().strftime('%Y%m%d%H%M%S')}-{random.randint(0, 0xffff):04x}"
 
 
+def norm_date(s) -> str | None:
+    """宽容日期归一：'2026-8-5' → '2026-08-05'；解析失败返回 None（调用方决定拒收或进 suspects）。
+
+    写入侧（ledger record/reverse/assert --date）先归一再落库，杜绝非补零日期
+    在按月/按日推导（date[:7] 比较、as_of 字符串比较）里静默丢失；
+    读取侧（月聚合）用它救回历史非补零坏行。
+    """
+    try:
+        return datetime.strptime(str(s).strip(), "%Y-%m-%d").date().isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
 def atomic_write(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
@@ -149,7 +159,7 @@ def check_value(col: dict, value, where: str) -> str | None:
         return None if not col.get("required") else f"{where}: 必填字段 {name} 缺失"
     if t == "number" and not isinstance(value, (int, float)) or isinstance(value, bool) and t == "number":
         return f"{where}: {name} 应为 number"
-    if t == "integer" and not isinstance(value, int):
+    if t == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
         return f"{where}: {name} 应为 integer"
     if t == "boolean" and not isinstance(value, bool):
         return f"{where}: {name} 应为 boolean"

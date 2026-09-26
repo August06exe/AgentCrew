@@ -2,6 +2,9 @@
 """migrate_from_fitmate.py — 从旧 FitMate（SQLite）一次性迁入数据。
 
 只读旧库、只写本助理 data\\；默认 --dry-run。原数据永远不被改动。
+--execute 为合并语义（非整表替换）：目标表既有行全部保留，迁移行按稳定 _id
+（源自旧库主键）去重后追加——迁移前已有行不丢，重跑幂等不重复迁入。
+报告 migrated（旧库读出）/appended（本次追加；DRY-RUN 下为预演值）/skipped（_id 已存在跳过）。
 用法：
   python tools/migrate_from_fitmate.py --sqlite "D:/path/Fitness/data/fitness.db"            # 预览
   python tools/migrate_from_fitmate.py --sqlite "...db" --execute                            # 实际迁入
@@ -13,7 +16,6 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fitlib as F  # noqa: E402
@@ -46,11 +48,17 @@ def migrate(db_path: str, execute: bool) -> dict:
         rows = []
         for r in cur:
             row = {renames.get(k, k): r[k] for k in r.keys() if k != "id"}
-            row["_id"] = f"m-{datetime.now().strftime('%Y%m%d%H%M%S')}-{old_table}-{len(rows):05d}"
+            # 稳定 _id：无时间戳成分，重跑按 _id 去重才能幂等；旧表无主键时退化为行序
+            row["_id"] = f"m-{old_table}-{r['id'] if 'id' in r.keys() else len(rows)}"
             rows.append(row)
-        report[old_table] = {"rows": len(rows), "target": new_table}
-        if execute and rows:
-            F.write_table(new_table, rows)
+        existing = F.read_rows(new_table)
+        existing_ids = {r.get("_id") for r in existing if not r.get("_corrupt")}
+        fresh = [r for r in rows if r["_id"] not in existing_ids]
+        if execute and fresh:
+            # 合并写入：既有行（含损坏行）原样保留，只追加去重后的迁移行——绝不整表替换
+            F.write_table(new_table, existing + fresh)
+        report[old_table] = {"migrated": len(rows), "appended": len(fresh),
+                             "skipped": len(rows) - len(fresh), "target": new_table}
     # 旧 app_config → 新 config.json（键名直迁，主人可再改）
     try:
         kv = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM app_config")}

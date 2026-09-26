@@ -263,8 +263,10 @@ def row_id() -> str:
 def ensure_agent_skeleton(agent_dir: str, repo_root: str | None = None) -> None:
     """建顾问的【存档切片】骨架（data/inbox/outbox）。物理位置：
     托管=实例 _save/agents/<id>/；lite=<助理>/_save/。程序区不再放任何增量数据。
-    tools 子目录（程序区）仅在缺失时补建。"""
-    root = repo_root or find_repo_root()
+    tools 子目录（程序区）仅在缺失时补建。
+    root 解析以 agent_dir 为准（向上找它所属的实例根），而非本库所在仓库——
+    否则给临时目录建骨架会把临时目录名写成实例存档切片（adopt zip/git 曾踩此坑）。"""
+    root = repo_root or find_repo_root(agent_dir)
     if root:
         sd = agent_save_dir(root, os.path.basename(os.path.abspath(agent_dir)))
     else:
@@ -396,7 +398,8 @@ def validate_manifest(m: dict, agent_dir: str | None = None) -> tuple[list[str],
 
 # ---------- 工具自检 ----------
 
-def selfcheck_tool(agent_dir: str, tool_rel: str) -> tuple[bool, str]:
+def selfcheck_tool(agent_dir: str, tool_rel: str,
+                   env_extra: dict[str, str] | None = None) -> tuple[bool, str]:
     agent_dir = os.path.abspath(agent_dir)
     tool = p(agent_dir, tool_rel.replace("/", os.sep))
     if not os.path.isfile(tool):
@@ -406,6 +409,7 @@ def selfcheck_tool(agent_dir: str, tool_rel: str) -> tuple[bool, str]:
             [sys.executable, tool, "--selfcheck"],
             capture_output=True, text=True, timeout=60, cwd=agent_dir,
             encoding="utf-8", errors="replace",
+            env={**os.environ, **(env_extra or {})},
         )
         if r.returncode != 0:
             return False, f"selfcheck 退出码 {r.returncode}: {(r.stderr or r.stdout).strip()[:300]}"
@@ -467,7 +471,7 @@ def find_manifest_dir(src: str) -> str | None:
                 if os.path.isfile(p(sub, "manifest.json")):
                     return sub
                 for name2 in sorted(os.listdir(sub)):
-                    sub2 = p(sub2, name2)
+                    sub2 = p(sub, name2)
                     if os.path.isdir(sub2) and os.path.isfile(p(sub2, "manifest.json")):
                         return sub2
     except OSError:
@@ -553,6 +557,8 @@ def _iter_save_files(sr: str):
     """yield (绝对路径, 条目名)：条目名一律相对存档根、'/' 分隔、无盘符无 '..'。"""
     for base, _dirs, files in os.walk(sr):
         for fn in files:
+            if fn.endswith(".part.asave"):
+                continue  # 兜底：自家打包中间产物绝不入包
             fp = os.path.join(base, fn)
             yield fp, os.path.relpath(fp, sr).replace(os.sep, "/")
 
@@ -577,6 +583,8 @@ def scan_save_stats(repo_root: str) -> dict:
     total = 0
     for base, _dirs, files in os.walk(sr):
         for fn in files:
+            if fn.endswith(".part.asave"):
+                continue  # 与 _iter_save_files 同口径：中间产物不计入统计/manifest
             entries += 1
             try:
                 total += os.path.getsize(os.path.join(base, fn))
@@ -626,10 +634,22 @@ def _check_exportable(repo_root: str) -> dict:
 
 def _pack_target(repo_root: str, out: str | None, stem: str) -> str:
     """决定包落点：out=已有目录 → 目录内默认名；out=文件路径 → 原样用；缺省 = 存档根上级目录。
-    目标已存在 → 追加 -N 序号，绝不静默覆盖。"""
+    目标已存在 → 追加 -N 序号，绝不静默覆盖。
+    落点守卫：--out 指进存档根（含子目录）→ .part.asave 中间产物会被自家 os.walk
+    打进包体，产出 ok:true 的废包——业务拒绝（默认落点=存档根上级目录）。"""
     default_name = f"{stem}-{datetime.now():%Y%m%d-%H%M%S}.asave"
     if out:
         outp = os.path.abspath(out)
+        sr = os.path.abspath(save_root(repo_root))
+        try:
+            inside = outp == sr or os.path.commonpath([outp, sr]) == sr
+        except ValueError:  # 异盘：必然在存档根之外
+            inside = False
+        if inside:
+            raise SaveGateError("out_inside_save",
+                                f"--out 落在存档根内部（{outp}），会被自家打包吞进包体——"
+                                "请指向存档根之外（缺省落点=存档根上级目录）",
+                                {"out": outp})
         if os.path.isdir(outp):
             outp = os.path.join(outp, default_name)
     else:
@@ -857,31 +877,31 @@ def _unpack_verified(z, dest: str, manifest: dict) -> tuple[int, int]:
         if os.path.commonpath([dest_abs, target]) != dest_abs:
             raise SaveGateError("unsafe_entry", f"条目逃逸存档根，已拒绝：{name!r}", {"entry": name})
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        chunks: list[bytes] = []
-        got = 0
         try:
-            with z.open(info) as f:
-                while True:
-                    chunk = f.read(min(1 << 20, info.file_size + 1 - got))
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    got += len(chunk)
-                    if got > info.file_size:
-                        raise SaveGateError("too_large",
-                                            f"条目实际字节数超过声明（元数据谎报）：{name}",
-                                            {"entry": name})
-        except SaveGateError:
-            raise
+            src_f = z.open(info)
         except (zipfile.BadZipFile, OSError) as e:  # OSError：截断包可致 seek EINVAL
             raise SaveGateError("bad_zip", f"条目读取失败（包损坏）：{name}：{e}") from e
+        got = 0
+        # 流式直写：单条目不再整体攒进内存（敌意包可撑 ~4GiB 峰值）；压缩比/总量闸照常生效
+        with src_f, open(target, "wb") as g:
+            while True:
+                try:
+                    chunk = src_f.read(min(1 << 20, info.file_size + 1 - got))
+                except (zipfile.BadZipFile, OSError) as e:  # OSError：截断包可致 seek EINVAL
+                    raise SaveGateError("bad_zip", f"条目读取失败（包损坏）：{name}：{e}") from e
+                if not chunk:
+                    break
+                g.write(chunk)
+                got += len(chunk)
+                if got > info.file_size:
+                    raise SaveGateError("too_large",
+                                        f"条目实际字节数超过声明（元数据谎报）：{name}",
+                                        {"entry": name})
         if got < info.file_size:
             raise SaveGateError("bad_zip", f"条目实际字节数不足声明（包损坏）：{name}", {"entry": name})
         total += got
         if total > SAVE_IMPORT_MAX_BYTES:
             raise SaveGateError("too_large", f"解压总量超上限（>{SAVE_IMPORT_MAX_BYTES} 字节，zip 炸弹防护）")
-        with open(target, "wb") as g:
-            g.write(b"".join(chunks))
         count += 1
     m_entries, m_bytes = manifest.get("entries"), manifest.get("bytes")
     if isinstance(m_entries, int) and count != m_entries:

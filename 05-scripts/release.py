@@ -21,6 +21,10 @@ def main() -> int:
     args = ap.parse_args()
     B.utf8_console()
 
+    # 危险操作守卫必须先于一切删除动作（先删后拒=事故：存档切片已被删光才报错）
+    if args.purge_data and not args.yes:
+        return B.fail("--purge-data 必须搭配 --yes（删除主人数据需显式确认）")
+
     root = B.find_repo_root()
     if not root:
         return B.fail("未找到AgentCrew 仓库根")
@@ -52,10 +56,6 @@ def main() -> int:
             shutil.move(inst_save, lite_save)
     elif args.purge_data and os.path.isdir(B.agent_save_dir_lite(src)):
         shutil.rmtree(B.agent_save_dir_lite(src), ignore_errors=True)
-
-    if args.purge_data:
-        if not args.yes:
-            return B.fail("--purge-data 必须搭配 --yes（删除主人数据需显式确认）")
 
     os.makedirs(standalone_root, exist_ok=True)
     shutil.move(src, dest)

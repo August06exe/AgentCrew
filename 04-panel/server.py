@@ -13,7 +13,7 @@ API：
   POST /api/save-export                    {} → 存档单文件导出（透传 save.py export）
   POST /api/save-import/preview            {path}|{b64,filename} → 导入预览（闸①②③只读）+ 一次性 token
   POST /api/save-import/confirm            {token} → 确认导入（sha256 复验后透传 save.py import）
-  GET  /jump/<id>                          刷新该助理看板数据后跳转
+  GET  /jump/<token>                       一次性跳转 token（/api/state 发放）→ 刷新该助理看板数据后跳转
 静态：/agent-file/<id>/<path…> 各助理文件（含看板）
 """
 from __future__ import annotations
@@ -44,6 +44,8 @@ INSTALL_PENDING: dict[str, dict] = {}  # token -> {"dir":..., "tmp": bool, "ts":
 IMPORT_PENDING: dict[str, dict] = {}
 IMPORT_TOKEN_TTL = 3600      # 与安装页一致：1 小时过期
 IMPORT_TOKEN_MAX = 50        # 与安装页一致：上限 50 丢最旧
+# 一次性跳转 token：/jump 会跑子进程写看板（有副作用），凭本页发放的 token 放行，防外站 <img> 直跳
+JUMP_PENDING: dict[str, dict] = {}  # token -> {"agent","ts"}
 
 
 def agent_save(agent_id: str) -> str:
@@ -95,7 +97,19 @@ def api_state() -> dict:
                 "tables": [t.get("name") for t in m.get("tables") or []],
                 "onboarding": m.get("onboarding", []),
             })
-    return {"ok": True, "root": ROOT, "profile": profile_state(), "agents": agents,
+    # 一次性跳转 token：随 state 发放、/jump 校验销号（跨站拿不到 token，直跳一律 4xx）
+    import secrets
+    now = time.time()
+    for k in [k for k, v in JUMP_PENDING.items() if now - v["ts"] > 3600]:
+        JUMP_PENDING.pop(k, None)
+    while len(JUMP_PENDING) >= 50:  # 上限：丢最旧
+        JUMP_PENDING.pop(min(JUMP_PENDING, key=lambda k: JUMP_PENDING[k]["ts"]), None)
+    jump = {}
+    for a in agents:
+        t = secrets.token_hex(16)
+        JUMP_PENDING[t] = {"agent": a["id"], "ts": now}
+        jump[a["id"]] = t
+    return {"ok": True, "root": ROOT, "profile": profile_state(), "agents": agents, "jump": jump,
             "save_watch": {"violations": B.scan_stray_increment(ROOT)[:20]}}
 
 
@@ -138,13 +152,24 @@ def _stage_b64(b64: str) -> str:
     return tmp
 
 
+def _remove_best_effort(path: str, tries: int = 3, delay: float = 0.05) -> None:
+    """删临时文件，尽力而为：Windows 下杀软/索引器短暂占位会 PermissionError，
+    短重试 3×50ms 后放弃（不向上抛，成败皆不阻塞主流程）。"""
+    for i in range(tries):
+        try:
+            os.remove(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if i < tries - 1:
+                time.sleep(delay)
+
+
 def _drop_import_token(token: str) -> dict | None:
     v = IMPORT_PENDING.pop(token, None)
     if v and v.get("staged"):
-        try:
-            os.remove(v["staged"])
-        except OSError:
-            pass
+        _remove_best_effort(v["staged"])
     return v
 
 
@@ -154,6 +179,14 @@ def _prune_import_tokens(now: float) -> None:
     while len(IMPORT_PENDING) >= IMPORT_TOKEN_MAX:  # 上限：丢最旧（暂存文件一并删）
         oldest = min(IMPORT_PENDING, key=lambda k: IMPORT_PENDING[k]["ts"])
         _drop_import_token(oldest)
+
+
+def _drop_install_token(token: str) -> dict | None:
+    """对称导入侧 _drop_import_token：token 逐出（过期/超限/消费）时连带 rmtree 解包临时目录。"""
+    v = INSTALL_PENDING.pop(token, None)
+    if v and v.get("tmp_root"):
+        shutil.rmtree(v["tmp_root"], ignore_errors=True)
+    return v
 
 
 def api_save_export() -> dict:
@@ -220,10 +253,7 @@ def api_save_import_preview(body: dict) -> tuple[dict, int]:
                 "note": "确认导入=整档替换当前存档（目标非空时旧档自动备份）；预览只读未动存档"}, 200
     finally:
         if staged and not ok_flag:
-            try:
-                os.remove(staged)
-            except OSError:
-                pass
+            _remove_best_effort(staged)
 
 
 def api_save_import_confirm(token: str) -> tuple[dict, int]:
@@ -231,7 +261,7 @@ def api_save_import_confirm(token: str) -> tuple[dict, int]:
     然后透传 save.py import（闸③④+原子换位+迁移由壳层完成）。"""
     pending = IMPORT_PENDING.pop(token, None)  # 一次性：无论成败即销号
     try:
-        if not pending:
+        if not pending or time.time() - pending["ts"] > IMPORT_TOKEN_TTL:
             return {"ok": False, "error": "token 无效或已过期，请重新预览"}, 400
         pkg = pending["pkg_path"]
         if not os.path.isfile(pkg):
@@ -251,10 +281,7 @@ def api_save_import_confirm(token: str) -> tuple[dict, int]:
         return out, (200 if out.get("ok") else 400)
     finally:
         if pending and pending.get("staged"):
-            try:
-                os.remove(pending["staged"])
-            except OSError:
-                pass
+            _remove_best_effort(pending["staged"])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -322,8 +349,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/" + page:
                 return self._file(B.p(PANEL_DIR, page), "text/html; charset=utf-8")
         if path.startswith("/docs/images/") and path.endswith(".png"):
-            target = os.path.abspath(B.p(ROOT, *path.lstrip("/").split("/")))
-            if os.path.isfile(target):
+            # 根界校验（同 /agent-file）：拦 ../ 与盘符等穿越，只认 docs/images 内的 png
+            base = os.path.abspath(B.p(ROOT, "docs", "images"))
+            target = os.path.abspath(B.p(base, *path[len("/docs/images/"):].split("/")))
+            try:
+                inside = os.path.commonpath([base, target]) == base
+            except ValueError:  # 跨盘等病态输入
+                inside = False
+            if inside and os.path.isfile(target):
                 return self._file(target, "image/png")
             return self._send(404, "not found".encode(), "text/plain; charset=utf-8")
         if path == "/panel-lib.js":
@@ -379,7 +412,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._file(target, ctype)
         return self._send(404, "not found".encode(), "text/plain; charset=utf-8")
 
-    def _jump(self, agent_id: str) -> None:
+    def _jump(self, token: str) -> None:
+        v = JUMP_PENDING.pop(token, None)  # 一次性：即销号，防重放
+        if not v or time.time() - v["ts"] > 3600:
+            return self._json({"ok": False, "error": "jump token 无效或已过期，请回面板重新打开看板"}, 403)
+        agent_id = v["agent"]
         adir = agent_dir(agent_id)
         if not adir:
             return self._json({"ok": False, "error": "no such agent"}, 404)
@@ -408,20 +445,19 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[1] == "agent" and parts[3] == "delete_row":
             if not TABLE_RE.match(str(body.get("table", ""))):
                 return self._json({"ok": False, "error": "bad table name"}, 400)
-            adir = agent_dir(parts[2])
-            if not adir:
-                return self._json({"ok": False, "error": "no such agent"}, 404)
-            tp = B.p(adir, "data", f"{body.get('table')}.jsonl")
+            # 数据在存档切片（v0.1 误用程序区路径致端点从未可用）；trash 同落存档 data/trash
+            sdir = agent_save(parts[2])
+            tp = B.p(sdir, "data", f"{body.get('table')}.jsonl")
             rows = B.read_jsonl(tp)
-            keep = [r for r in rows if r.get("_id") != body.get("row_id")]
-            if len(keep) == len(rows):
-                return self._json({"ok": False, "error": "row not found"}, 404)
             removed = [r for r in rows if r.get("_id") == body.get("row_id")]
+            if not removed:
+                return self._json({"ok": False, "error": "row not found"}, 404)
             from datetime import datetime
             trash = B.p(sdir, "data", "trash", f"{body.get('table')}-{datetime.now():%Y%m%d}.jsonl")
             for r in removed:
                 r["_deleted_at"] = B.now_iso()
                 B.append_jsonl(trash, r)
+            keep = [r for r in rows if r.get("_id") != body.get("row_id")]
             B.atomic_write_text(tp, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in keep))
             return self._json({"ok": True, "deleted": body.get("row_id"), "trash": os.path.relpath(trash, ROOT)})
 
@@ -489,7 +525,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": f"02-agents/{aid} 已存在"}, 400)
 
         shutil.copytree(B.p(ROOT, "03-template"),
-                        dest, ignore=shutil.ignore_patterns("data", "__pycache__", ".zcode", "dashboard/data.js"))
+                        dest, ignore=shutil.ignore_patterns("data", "__pycache__", ".zcode", "data.js", "data.json"))
         try:
             mp = B.p(dest, "manifest.json")
             m = B.read_json(mp)
@@ -512,55 +548,65 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": f"创建失败已撤销：{e}"}, 500)
 
     def _resolve_source(self, body: dict):
-        """返回 (manifest目录, 错误, 是否临时目录)。zip=解包；path=原样；git=浅克隆（只读不执行）。
-        解包/克隆后若找不到 manifest，就地清理临时目录并返回错误——绝不留泄漏。"""
+        """返回 (manifest目录, 错误, 临时根目录|None)。zip=解包；path=原样；git=浅克隆（只读不执行）。
+        解包/克隆后若找不到 manifest，就地清理临时目录并返回错误——绝不留泄漏；
+        坏 b64/坏 zip 等异常同样先清场再上抛（预览统一回 400）。"""
         if body.get("mode") == "zip":
             tmp = tempfile.mkdtemp(prefix="panel-install-")
-            zpath = os.path.join(tmp, body.get("filename") or "agent.zip")
-            with open(zpath, "wb") as fh:
-                fh.write(base64.b64decode(body.get("b64", "")))
-            B.extract_zip(zpath, os.path.join(tmp, "x"))
+            try:
+                fname = str(body.get("filename") or "agent.zip")
+                if fname in (".", "..") or "/" in fname or "\\" in fname or ":" in fname:
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    return None, "zip 文件名不合法（含路径分隔符或盘符）", None
+                zpath = os.path.join(tmp, os.path.basename(fname))
+                with open(zpath, "wb") as fh:
+                    fh.write(base64.b64decode(body.get("b64", "")))
+                B.extract_zip(zpath, os.path.join(tmp, "x"))
+            except Exception:  # noqa: BLE001  坏 b64 / 坏 zip 等
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise
             found = B.find_manifest_dir(os.path.join(tmp, "x"))
             if not found:
                 shutil.rmtree(tmp, ignore_errors=True)
-                return None, "包内找不到 manifest.json（支持根目录或下两层）", True
-            return found, None, True
+                return None, "包内找不到 manifest.json（支持根目录或下两层）", None
+            return found, None, tmp
         if body.get("mode") == "path":
             p = os.path.abspath(body.get("path", ""))
             if not os.path.isdir(p):
-                return None, f"文件夹不存在：{p}", False
+                return None, f"文件夹不存在：{p}", None
             found = B.find_manifest_dir(p)
             if not found:
-                return None, "该文件夹内找不到 manifest.json", False
-            return found, None, False
+                return None, "该文件夹内找不到 manifest.json", None
+            return found, None, None
         if body.get("mode") == "git":
             tmp = tempfile.mkdtemp(prefix="panel-install-")
-            good, msg = B.clone_git(body.get("url", ""), os.path.join(tmp, "x"))
+            try:
+                good, msg = B.clone_git(body.get("url", ""), os.path.join(tmp, "x"))
+            except Exception:  # noqa: BLE001
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise
             if not good:
                 shutil.rmtree(tmp, ignore_errors=True)
-                return None, f"git clone 失败：{msg}", True
+                return None, f"git clone 失败：{msg}", None
             found = B.find_manifest_dir(os.path.join(tmp, "x"))
             if not found:
                 shutil.rmtree(tmp, ignore_errors=True)
-                return None, "仓库内找不到 manifest.json（支持根目录或下两层）", True
-            return found, None, True
-        return None, "mode 需为 zip|path|git", False
+                return None, "仓库内找不到 manifest.json（支持根目录或下两层）", None
+            return found, None, tmp
+        return None, "mode 需为 zip|path|git", None
 
     def _install_preview(self, body: dict) -> None:
         """第一段：解包/克隆 + 只读校验（不执行包内任何代码），返回预览与一次性 token。"""
         import secrets
         import time
         try:
-            src_dir, err, is_tmp = self._resolve_source(body)
-        except Exception as e:  # noqa: BLE001  坏 b64 / 坏 zip 等
+            src_dir, err, tmp_root = self._resolve_source(body)
+        except Exception as e:  # noqa: BLE001  坏 b64 / 坏 zip 等（_resolve_source 已先清场）
             return self._json({"ok": False, "error": f"来源解析失败：{e}"}, 400)
         if err:
-            if is_tmp and src_dir:
-                shutil.rmtree(os.path.dirname(src_dir), ignore_errors=True)
             return self._json({"ok": False, "error": err}, 400)
         if not src_dir:
             return self._json({"ok": False, "error": "找不到 manifest.json（支持根目录或下两层）"}, 400)
-        tmp_root = os.path.dirname(src_dir) if is_tmp else None
         try:
             mp = B.p(src_dir, "manifest.json")
             if not os.path.isfile(mp):
@@ -571,12 +617,11 @@ class Handler(BaseHTTPRequestHandler):
             problems, warnings = B.validate_manifest(m, src_dir)
             token = secrets.token_hex(16)
             now = time.time()
-            for k in [k for k, v in INSTALL_PENDING.items() if now - v["ts"] > 3600][:]:
-                INSTALL_PENDING.pop(k, None)
-            while len(INSTALL_PENDING) >= 50:  # 上限：丢最旧
-                oldest = min(INSTALL_PENDING, key=lambda k: INSTALL_PENDING[k]["ts"])
-                INSTALL_PENDING.pop(oldest, None)
-            INSTALL_PENDING[token] = {"dir": os.path.abspath(src_dir), "tmp": is_tmp, "ts": now}
+            for k in [k for k, v in INSTALL_PENDING.items() if now - v["ts"] > 3600]:
+                _drop_install_token(k)  # 过期逐出：解包临时目录一并清
+            while len(INSTALL_PENDING) >= 50:  # 上限：丢最旧（临时目录一并清）
+                _drop_install_token(min(INSTALL_PENDING, key=lambda k: INSTALL_PENDING[k]["ts"]))
+            INSTALL_PENDING[token] = {"dir": os.path.abspath(src_dir), "tmp_root": tmp_root, "ts": now}
             return self._json({"ok": True, "token": token,
                                "preview": {"id": m.get("id"), "name": m.get("name"),
                                            "version": m.get("version"), "author": m.get("author"),
@@ -595,10 +640,10 @@ class Handler(BaseHTTPRequestHandler):
     def _install_confirm(self, body: dict) -> None:
         """第二段：凭 token 真正收编（此时才执行包内工具自检）。"""
         token = body.get("token", "")
-        pending = INSTALL_PENDING.pop(token, None)
-        if not pending or not os.path.isdir(pending["dir"]):
-            return self._json({"ok": False, "error": "token 无效或已过期，请重新预览"}, 400)
+        pending = INSTALL_PENDING.pop(token, None)  # 一次性：无论成败即销号
         try:
+            if not pending or time.time() - pending["ts"] > 3600 or not os.path.isdir(pending["dir"]):
+                return self._json({"ok": False, "error": "token 无效或已过期，请重新预览"}, 400)
             r = subprocess.run([sys.executable, B.p(ROOT, "05-scripts", "adopt.py"),
                                 "--path", pending["dir"]],
                                capture_output=True, text=True, encoding="utf-8", timeout=300)
@@ -608,8 +653,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = {"ok": False, "error": (r.stderr or r.stdout)[:400]}
             return self._json(out, 200 if out.get("ok") else 400)
         finally:
-            if pending["tmp"]:
-                shutil.rmtree(os.path.dirname(pending["dir"]), ignore_errors=True)
+            if pending and pending.get("tmp_root"):
+                shutil.rmtree(pending["tmp_root"], ignore_errors=True)
 
 
 class Server(ThreadingHTTPServer):
@@ -618,8 +663,33 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = False
 
 
+def _sweep_temp_orphans() -> None:
+    """启动兜底：清 %TEMP% 里超 TTL 的导入暂存文件（crew-import-staging-*）与
+    安装解包孤儿（panel-install-*）——关窗即退等场景留下的残留，靠下次启动兜底。"""
+    now = time.time()
+    tmp = tempfile.gettempdir()
+    try:
+        names = os.listdir(tmp)
+    except OSError:
+        return
+    for name in names:
+        if not (name.startswith("crew-import-staging-") or name.startswith("panel-install-")):
+            continue
+        fp = os.path.join(tmp, name)
+        try:
+            if now - os.path.getmtime(fp) <= IMPORT_TOKEN_TTL:
+                continue
+            if os.path.isdir(fp):
+                shutil.rmtree(fp, ignore_errors=True)
+            else:
+                _remove_best_effort(fp)
+        except OSError:
+            pass
+
+
 def main() -> int:
     B.utf8_console()
+    _sweep_temp_orphans()
     try:
         server = Server(("127.0.0.1", PORT), Handler)
     except OSError:

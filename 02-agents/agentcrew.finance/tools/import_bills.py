@@ -43,11 +43,16 @@ cancel_log 痕迹表——此后无论带不带 --match-existing 重导（换旗
     任务书给的"日期+金额+对方+商品"补了三味药：完整时间戳（同日两笔同额消费不误伤）、
     流向+种类（当日全额退款与原支出不撞键）、平台前缀。
   * 对消在"±3天+同金额"之上加**同向守卫**（FLOW_COMPAT）：退款绝不与支出对消
-    （否则会把真到账的退款吞掉）；转账可与任意向对消（同一笔还款在两家账单里
-    一边记支出、一边记中性是常态）。每条已有流水/待确认行至多被对消一次。
+    （否则会把真到账的退款吞掉）；账本侧手记退款（支出科目→资金账户）判为 refund
+    可与账单退款行对消（真实账户间转账判为 transfer，与退款互不对消）；转账可与
+    任意向对消（同一笔还款在两家账单里一边记支出、一边记中性是常态）。
+    每条已有流水/待确认行至多被对消一次。
   * 转账/还款行（kind=transfer）永不自动落库——from/to 无从可靠推断，进 manual 清单，
     提示用 ledger.py record 手工记（主人确认方向）或与另一张账单对消。
-  * 退款行按复式记为"支出科目 → 账户"（冲减支出），备注加"退款："前缀。
+  * 退款行按复式记为"支出科目 → 账户"（冲减支出），备注加"退款："前缀；
+    「原支出行状态含已全额退款」形态照记支出（标记已退款），apply 时自动补一笔
+    同额冲减分录（note 标注自动冲减并关联原行；dry-run 以 would_record_refund 预览），
+    退款的钱必须回账（D3）。
   * 落库与余额推导全部复用 ledger.py / data.py（单一记账真相），本文件不另设账。
 
 微信账单"格式假设"（测试造假照此造；真实导出不符时以技术错误/坏行计数暴露）：
@@ -103,11 +108,15 @@ FIELD_ALIASES = {
 }
 WECHAT_HINTS = ("交易类型", "当前状态", "支付方式")
 # 对消同向守卫：账单行流向 → 允许对消的账本/先前账单行流向
+# （refund 含 "in"：跨文件退款行以 make_row 的 flow="in" 进池；含 "refund"：账本手记退款，
+#   见 ledger_flow——章程"退款=方向倒过来再记一笔"即 支出科目→资金账户 形态。
+#   绝不含 "out"：退款绝不与支出对消，防吞掉真到账的退款；也绝不含 "transfer"：
+#   真实账户间转账（还款/互转）与退款是两码事，不得互相吞单。）
 FLOW_COMPAT = {
     "out": {"out", "transfer"},
     "in": {"in", "transfer"},
     "transfer": {"out", "in", "transfer"},
-    "refund": {"in"},  # 退款绝不与支出对消，防吞掉真到账的退款
+    "refund": {"in", "refund"},
 }
 BAL_RE = re.compile(r"(?:账户余额|期末余额|当前余额|余额)\s*[:：]\s*[¥￥]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
 MATCH_DAYS = 3  # 双花对消的日期窗口
@@ -351,8 +360,17 @@ def suggest_for(text: str) -> dict:
 
 
 def ledger_flow(t: dict, tmap: dict) -> str:
+    """账本流水 → 对消池流向（唯一消费点：process() 的对消池构建，不影响记账与报表）。
+
+    转账判型口径（D2）：资金账户 ↔ 资金/负债账户（资产↔资产/负债/权益）= "transfer"；
+    支出科目 → 资金账户 = "refund"（手记退款，章程 §3"退款=方向倒过来再记一笔"）。
+    原实现把手记退款落入 "transfer"，而 FLOW_COMPAT["refund"] 不含 "transfer"，
+    导致手记退款+账单同笔退款落两遍（预算 spent 变负）——对消结构性失明。
+    """
     if tmap.get(t.get("to_account")) == "expense":
         return "out"
+    if tmap.get(t.get("from_account")) == "expense":
+        return "refund"
     if tmap.get(t.get("from_account")) == "income":
         return "in"
     return "transfer"
@@ -416,6 +434,17 @@ def view(row: dict) -> dict:
             "dedup_key": row["dedup_key"]}
 
 
+def _auto_refund_entry(row: dict, orig_id: str | None) -> dict:
+    """「原支出行状态含已全额退款」形态的自动冲减分录（D3）：资金账户→支出科目 的反向，
+    即 支出科目 → 资金账户、同额，note 标注自动冲减并关联原行（dry-run 阶段原行未落库，
+    关联处标注"落库时回填"）。"""
+    ref = f"（关联原行 {orig_id}）" if orig_id else "（关联原行：落库时回填）"
+    return {"from_account": row["to"], "to_account": row["from"],
+            "date": row["date"], "amount": row["amount"],
+            "note": f"自动冲减：{row['note']}{ref}", "source": "import",
+            "dedup_key": f"{row['dedup_key']}:refund"}
+
+
 # ---------- 断言 ----------
 
 def run_assertion(args, file_metas: list[dict], max_row_date: str | None) -> dict:
@@ -431,9 +460,8 @@ def run_assertion(args, file_metas: list[dict], max_row_date: str | None) -> dic
                 "known_accounts": sorted(x for x in names if x)}
     as_of = None
     if args.assert_date:
-        try:
-            as_of = _date.fromisoformat(args.assert_date).isoformat()
-        except ValueError:
+        as_of = D.norm_date(args.assert_date)  # 与 ledger assert 同口径：归一非补零，拒收垃圾（D1②）
+        if not as_of:
             raise ValueError(f"--assert-date 应为 YYYY-MM-DD，现在是 {args.assert_date!r}")
     if not as_of:
         ends = [m["period"][1] for m in file_metas if m.get("period") and m["period"][1]]
@@ -580,6 +608,25 @@ def process(files: list[str], args) -> dict:
                 applied.append({**view(row), "from_account": row["from"],
                                 "to_account": row["to"], "_id": payload.get("recorded"),
                                 "duplicate": bool(payload.get("duplicate"))})
+                # D3：原支出行状态含「已全额退款」→ 照记支出后自动生成冲减分录，
+                # 退款的钱回账（否则退款只打标记、账面永不冲减）
+                if row.get("refunded") and not payload.get("duplicate"):
+                    rentry = _auto_refund_entry(row, payload.get("recorded"))
+                    rpayload = call_json(L.cmd_record, argparse.Namespace(
+                        **rentry, raw_text=row["raw"], json=None, dry_run=False))
+                    if rpayload.get("ok"):
+                        applied.append({**view(row), "from_account": rentry["from_account"],
+                                        "to_account": rentry["to_account"],
+                                        "_id": rpayload.get("recorded"),
+                                        "auto_refund": True,
+                                        "refund_of": payload.get("recorded"),
+                                        "duplicate": bool(rpayload.get("duplicate"))})
+                    else:
+                        failed.append({**view(row), "from_account": rentry["from_account"],
+                                       "to_account": rentry["to_account"],
+                                       "reason_code": rpayload.get("reason_code"),
+                                       "error": rpayload.get("error"),
+                                       "auto_refund_failed_for": payload.get("recorded")})
             else:
                 failed.append({**view(row), "from_account": row["from"],
                                "to_account": row["to"],
@@ -613,6 +660,8 @@ def process(files: list[str], args) -> dict:
                                  "date": row["date"], "amount": row["amount"],
                                  "note": row["note"], "source": "import",
                                  "dedup_key": row["dedup_key"]}
+            if row.get("refunded"):  # D3：已全额退款形态 apply 时会自动生成冲减分录，dry-run 先亮出来
+                e["would_record_refund"] = _auto_refund_entry(row, None)
         pending_view.append(e)
 
     totals = {"parsed": sum(m["parsed"] for m in file_metas),
@@ -689,7 +738,8 @@ def cmd_selfcheck(_a) -> int:
                    "checks": ["编码嗅探(utf-8 BOM/GBK)", "表头特征嗅探(非首行)",
                               "归一化+转账/退款标记", "坏行跳过计数", "suggest 建议",
                               "dry-run 待确认清单+零落库", "--apply 落库", "同文件重导零副作用(幂等)",
-                              "跨文件+对账本双花对消", "对消留痕 cancel_log+换旗重导幂等", "期末余额断言"],
+                              "跨文件+对账本双花对消", "对消留痕 cancel_log+换旗重导幂等",
+                              "已全额退款形态自动冲减", "期末余额断言"],
                    "sandbox": "临时目录已自动清除",
                    "user_view": "自检通过：假账单全流程（解析→去重→对消→落库→断言）在临时目录走通，零残留。"})
 
@@ -840,6 +890,36 @@ def _selfcheck_body(tmp: str) -> list[str]:
     chk(tB["applied"] == 0 and tB["duplicates"] == 1,
         f"换旗（无旗）重导必须凭对消痕迹跳过，不得再入账：{tB}")
     chk(len(L.load_txns()) == n_ledger, "换旗重导把已对消的经济事件又记了一遍")
+
+    # 6) 「原支出行状态含已全额退款」形态（D3）：dry-run 预览冲减分录；apply 落库原单+冲减两笔，
+    #    冲减 note 关联原行；重导凭 dedup 跳过，不再生成第二笔冲减
+    p_ref = os.path.join(tmp, "wechat_refunded.csv")
+    with open(p_ref, "wb") as f:
+        f.write((
+            "微信支付账单明细,,,,,,,,,\n"
+            "交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注\n"
+            "2026-09-22 09:00:00,商户消费,某店,某商品,支出,¥20.00,零钱,已全额退款,WX008,M008,/\n"
+        ).encode("utf-8"))
+    n_pre6 = len(L.load_txns())
+    rep_d6 = process([p_ref], mk_args([p_ref]))
+    pv6 = rep_d6["pending"][0]
+    wr6 = pv6.get("would_record_refund") or {}
+    chk(wr6.get("from_account") == "支出·餐饮" and wr6.get("to_account") == "微信零钱"
+        and wr6.get("amount") == 20.0, f"dry-run 缺自动冲减预览：{pv6}")
+    rep6 = process([p_ref], mk_args([p_ref], apply=True))
+    t6 = rep6["totals"]
+    chk(t6["applied"] == 2 and t6["failed"] == 0, f"已全额退款形态应落库原单+冲减共 2 笔：{t6}")
+    tx6 = L.load_txns()
+    chk(len(tx6) == n_pre6 + 2, f"冲减应净增 2 行流水：{len(tx6)} vs {n_pre6}")
+    orig6 = next((t for t in tx6 if t.get("dedup_key") == pv6["dedup_key"]), None)
+    rev6 = next((t for t in tx6 if t.get("dedup_key") == pv6["dedup_key"] + ":refund"), None)
+    chk(orig6 is not None and rev6 is not None
+        and rev6.get("from_account") == "支出·餐饮" and rev6.get("to_account") == "微信零钱"
+        and rev6.get("amount") == 20.0 and str(orig6.get("_id")) in str(rev6.get("note")),
+        f"冲减分录缺失或未关联原行：{rev6}")
+    rep6b = process([p_ref], mk_args([p_ref], apply=True))
+    chk(rep6b["totals"]["applied"] == 0 and rep6b["totals"]["duplicates"] == 1
+        and len(L.load_txns()) == n_pre6 + 2, f"重导不得再生成冲减分录：{rep6b['totals']}")
     return problems
 
 

@@ -138,13 +138,15 @@ document.getElementById('skin').addEventListener('error', function(){ this.setAt
     return '<tr>'+keys.map(function(k){var v=r[k]===null||r[k]===undefined?'—':String(r[k]);return '<td>'+v.replace(/</g,'&lt;')+'</td>';}).join('')+'</tr>';
   }).join('');
 
-  // 目标进度条
+  // 目标进度条（速率型目标 daily/weekly 不算百分比，与 tools/daily.py goals 口径一致）
   document.getElementById('goals').innerHTML = goals.length ? goals.map(function(g){
+    var isRate = g.timeframe==='daily'||g.timeframe==='weekly';
     var pct=null;
-    if (g.start_value!==undefined && g.target_value!==undefined && g.current_value!==undefined && g.start_value!==g.target_value) {
+    if (!isRate && g.start_value!==undefined && g.target_value!==undefined && g.current_value!==undefined && g.start_value!==g.target_value) {
       pct = Math.max(0, Math.min(100, (g.current_value-g.start_value)/(g.target_value-g.start_value)*100));
     }
-    return '<div class="bh-goal"><b>'+g.name+'</b> <span class="bh-muted">'+(g.current_value!==undefined?g.current_value:'—')+' → '+g.target_value+' '+(g.unit||'')+(pct!==null?(' · '+Math.round(pct)+'%'):'')+'</span>'+
+    var pctTxt = pct!==null ? (' · '+Math.round(pct)+'%') : (isRate ? ' · 按记录另计' : '');
+    return '<div class="bh-goal"><b>'+g.name+'</b> <span class="bh-muted">'+(g.current_value!==undefined?g.current_value:'—')+' → '+g.target_value+' '+(g.unit||'')+pctTxt+'</span>'+
            '<div class="bh-goalbar"><span style="width:'+(pct||0)+'%"></span></div></div>';
   }).join('') : '<span class="bh-muted">还没有目标，跟助理说「设目标」。</span>';
 })();

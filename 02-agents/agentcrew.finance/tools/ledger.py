@@ -32,7 +32,6 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import data as D  # noqa: E402  （存档解析器与通用读写，范式 §5/§6）
@@ -90,8 +89,10 @@ def derive(accounts: list[dict], txns: list[dict], as_of: str | None = None):
       displayed — 按科目符号呈报的余额（见模块头符号约定）；
       uniform   — 未符号代数和（流入−流出），全部账户之和恒应为 0；
       orphans   — 指向不存在账户的流水（试算不平衡的头号嫌疑）；
-      malformed — 金额缺失/非数值或 from/to 缺失的坏行。
+      malformed — 金额缺失/非数值、from/to 缺失或日期不可解析的坏行。
     as_of：只统计 date ≤ as_of 的流水（期末对账用）。
+    日期一律经 D.norm_date 宽容归一：历史非补零行（如 '2026-8-5'）照常计入，
+    解析失败的行进 malformed（suspects 机制），不在推导中静默消失。
     """
     names = {a.get("name") for a in accounts}
     sign = {a.get("name"): SIGN.get(a.get("type"), 1) for a in accounts}
@@ -103,7 +104,11 @@ def derive(accounts: list[dict], txns: list[dict], as_of: str | None = None):
         if not isinstance(amt, (int, float)) or isinstance(amt, bool) or not f or not to:
             malformed.append(t)
             continue
-        if as_of and str(t.get("date", "")) > as_of:
+        nd = D.norm_date(t.get("date"))
+        if nd is None:
+            malformed.append(t)
+            continue
+        if as_of and nd > as_of:
             continue
         if f not in names or to not in names:
             orphans.append(t)
@@ -114,10 +119,16 @@ def derive(accounts: list[dict], txns: list[dict], as_of: str | None = None):
     return displayed, unif, orphans, malformed
 
 
-def latest_valuations() -> dict[str, dict]:
-    """每账户最新一跳估值：按 (date, created_at) 取最大（主人报的数以最新为准）。"""
+def latest_valuations(as_of: str | None = None) -> dict[str, dict]:
+    """每账户最新一跳估值：按 (date, created_at) 取最大（主人报的数以最新为准）。
+
+    as_of：只采信 date ≤ as_of 的快照（与 report._valuation_upto 同口径）——
+    未来日期的估值快照（手滑填错年份）不得被净资产/看板采信。
+    """
     best: dict[str, dict] = {}
     for v in load_valuations():
+        if as_of and str(v.get("date", "")) > as_of:
+            continue
         key = (str(v.get("date", "")), str(v.get("created_at", "")))
         cur = best.get(v.get("account"))
         if cur is None or key > (str(cur.get("date", "")), str(cur.get("created_at", ""))):
@@ -215,16 +226,19 @@ def cmd_record(a) -> int:
     source = a.source or base.get("source") or "record"
     dedup = a.dedup_key if a.dedup_key is not None else base.get("dedup_key")
 
-    if not isinstance(amt, (int, float)) or isinstance(amt, bool) or float(amt) <= 0:
-        return D.jfail(f"金额必须为正数（方向只由 from/to 表达），现在是 {amt!r}")
-    amt = round(float(amt), 2)
+    if not isinstance(amt, (int, float)) or isinstance(amt, bool):
+        return D.jfail(f"金额必须为数值，现在是 {amt!r}")
+    orig_amt, amt = amt, round(float(amt), 2)
+    if amt <= 0:  # 先 round 再校验：0.001 这类微额 round 到分为 0，落库即幽灵流水（D4）
+        return D.jout({"ok": False, "reason_code": "amount_too_small",
+                       "error": f"金额必须为正数（方向只由 from/to 表达）；"
+                                f"{orig_amt!r} 四舍五入到分为 {amt}，拒绝落库"}, code=1)
     if not f or not to:
         return D.jfail("from 与 to 都必填")
     if f == to:
         return D.jfail(f"from 与 to 不能相同：{f}")
-    try:
-        datetime.strptime(str(date), "%Y-%m-%d")
-    except ValueError:
+    ndate = D.norm_date(date)  # 宽容归一：'2026-8-5' 存成 '2026-08-05'，杜绝按月/按日推导静默丢失
+    if not ndate:
         return D.jfail(f"date 应为 YYYY-MM-DD，现在是 {date!r}")
     if source not in ("record", "import"):
         return D.jfail(f"source 必须是 record/import，现在是 {source!r}")
@@ -242,7 +256,7 @@ def cmd_record(a) -> int:
         if dup:
             return D.jout({"ok": True, "duplicate": True, "existing_id": dup.get("_id"),
                            "user_view": "这笔已经记过了（去重键相同），跳过。"})
-    row = {"date": str(date), "from_account": f, "to_account": to, "amount": amt,
+    row = {"date": ndate, "from_account": f, "to_account": to, "amount": amt,
            "note": note, "raw_text": raw, "source": source, "dedup_key": dedup,
            "_id": D.row_id(), "created_at": D.now_iso(), "recorded_at": D.now_iso()}
     if a.dry_run:
@@ -284,9 +298,10 @@ def cmd_balance(a) -> int:
 
 
 def cmd_net_worth(_a) -> int:
+    today = D.now_iso()[:10]
     accounts = load_accounts()
     disp, _, orphans, malformed = derive(accounts, load_txns())
-    vals = latest_valuations()
+    vals = latest_valuations(today)  # 只采信 date ≤ 今天的估值快照（D6，与月报口径对齐）
     assets: list[dict] = []
     liabilities: list[dict] = []
     investments: list[dict] = []
@@ -363,7 +378,11 @@ def cmd_assert(a) -> int:
         return D.jout({"ok": False, "reason_code": "unknown_account",
                        "error": f"账户「{a.account}」不存在",
                        "known_accounts": _known_names(accounts)})
-    as_of = a.date or D.now_iso()[:10]
+    as_of = D.now_iso()[:10]
+    if a.date:  # 垃圾/非补零日期会静默改变期末语义，必须先归一（D1②，与 record 同校验）
+        as_of = D.norm_date(a.date)
+        if not as_of:
+            return D.jfail(f"--date 应为 YYYY-MM-DD，现在是 {a.date!r}")
     disp, _, _, _ = derive(accounts, load_txns(), as_of=as_of)
     derived = disp.get(a.account, 0.0)
     reported = round(float(a.balance), 2)
@@ -475,13 +494,16 @@ def cmd_reverse(a) -> int:
     if prior:
         return D.jout({"ok": False, "reason_code": "already_reversed",
                        "error": f"该笔已被冲正（冲正单 {prior.get('_id')}），不再重复冲正"})
+    if orig.get("reversed_txn"):  # 目标自身是冲正单：再冲正=等价复活原单，审计链自相矛盾（D5）
+        return D.jout({"ok": False, "reason_code": "already_reversed",
+                       "error": f"该笔本身是冲正单（冲正的是 {orig.get('reversed_txn')}），不可再冲正",
+                       "hint": "如需撤销这笔冲正的效果，请照原单重新记一笔正向流水"})
     rdate = a.date or str(orig.get("date", ""))
-    try:
-        datetime.strptime(rdate, "%Y-%m-%d")
-    except (TypeError, ValueError):
+    nrdate = D.norm_date(rdate)  # 原单若是历史非补零行，冲正单一并归一（D1①）
+    if not nrdate:
         return D.jfail(f"--date 应为 YYYY-MM-DD，现在是 {rdate!r}")
     note = f"冲正 {a.id}" + (f"（{a.reason}）" if a.reason else "")
-    row = {"date": rdate, "from_account": orig.get("to_account"),
+    row = {"date": nrdate, "from_account": orig.get("to_account"),
            "to_account": orig.get("from_account"), "amount": orig.get("amount"),
            "note": note, "raw_text": orig.get("raw_text"), "source": "record",
            "reversed_txn": a.id,
@@ -501,14 +523,16 @@ def month_net_agg(txns: list[dict], tmap: dict, mkey: str) -> dict:
 
     与 budget.month_net_by_account / report.expense_by_category 同一真相：
     每笔流水对科目是"流入 +amt / 流出 −amt"，冲正/退款行（如 支出·餐饮 → 微信零钱）
-    自然抵减原单，而不是被毛额口径漏掉。坏行（金额非数值/缺方向）整行跳过，
-    与 budget.month_net_by_account 同滤。净额归零（|v|≤EPS）的类别不留行，
+    自然抵减原单，而不是被毛额口径漏掉。坏行（金额非数值/缺方向/日期不可解析）整行跳过，
+    与 budget.month_net_by_account 同滤；历史非补零日期行（如 '2026-8-5'）经宽容归一
+    照常计入当月，不在聚合中静默消失。净额归零（|v|≤EPS）的类别不留行，
     与 report.expense_by_category 同滤——三处口径逐位可对账。
     """
     inc: dict[str, float] = {}
     exp: dict[str, float] = {}
     for t in txns:
-        if str(t.get("date", ""))[:7] != mkey:
+        nd = D.norm_date(t.get("date"))
+        if nd is None or nd[:7] != mkey:
             continue
         amt = t.get("amount")
         f, to = t.get("from_account"), t.get("to_account")
@@ -536,7 +560,7 @@ def serve_snapshot() -> dict:
     accounts = load_accounts()
     txns = load_txns()
     disp, _, orphans, malformed = derive(accounts, txns)
-    vals = latest_valuations()
+    vals = latest_valuations(today)  # 只采信 date ≤ 今天的估值快照（D6，与月报口径对齐）
     tmap = {a.get("name"): a.get("type") for a in accounts}
 
     balances = [{"name": a.get("name"), "type": a.get("type"),
@@ -649,6 +673,24 @@ def cmd_selfcheck(_a) -> int:
         problems.append(f"全额冲正后支出应归零且不留行：{agg_f}")
     if abs((agg_f["income"] - agg_f["expense"]) - agg_f["net"]) > EPS:
         problems.append(f"月度净额恒等式不成立：{agg_f}")
+    # 2c) 日期容错（D1 回归）：非补零日期行经 norm_date 归一照常计入，垃圾日期行进 malformed
+    drows = txns + [
+        {"_id": "9", "date": "2026-9-6", "from_account": "微信零钱",
+         "to_account": "支出·餐饮", "amount": 10},   # 非补零 → 归一为 2026-09-06 计入
+        {"_id": "10", "date": "not-a-date", "from_account": "微信零钱",
+         "to_account": "支出·餐饮", "amount": 20},   # 垃圾日期 → suspects（malformed），不静默计数
+    ]
+    disp_d, _, _, mal_d = derive(accts, drows)
+    if abs(disp_d.get("支出·餐饮", 0.0) - 442.0) > EPS or abs(disp_d.get("微信零钱", 0.0) - 13758.0) > EPS:
+        problems.append(f"非补零日期行未被宽容归一计入推导：{disp_d}")
+    if len(mal_d) != 1:
+        problems.append(f"垃圾日期行应进 malformed（suspects 机制），得 {len(mal_d)} 行")
+    disp_e, _, _, _ = derive(accts, drows, as_of="2026-09-05")
+    if abs(disp_e.get("微信零钱", 0.0) - 13768.0) > EPS:
+        problems.append(f"as_of 封顶对归一后日期比较失效：{disp_e.get('微信零钱')}")
+    agg_d = month_net_agg(drows, tmap_s, "2026-09")
+    if abs(agg_d["expense_by_category"].get("支出·餐饮", 0) - 442.0) > EPS:
+        problems.append(f"月聚合未宽容归一非补零日期行：{agg_d}")
     # 3) 真实账本的试算状态（数据状况只报告，不算工具故障）
     real_accounts, real_txns = load_accounts(), load_txns()
     _, runif, rorph, rmal = derive(real_accounts, real_txns)
